@@ -24,6 +24,9 @@ import (
 	"github.com/combor/vodarr/internal/sabnzbd"
 )
 
+// version is overridden at build time via -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if err := run(log); err != nil {
@@ -84,7 +87,7 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{Addr: *listen, Handler: logRequests(log, mux), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("vodarr listening", "addr", *listen, "download_dir", dir, "providers", providers.Names())
+	log.Info("vodarr listening", "version", version, "addr", *listen, "download_dir", dir, "providers", providers.Names())
 
 	var serveErr error
 	select {

@@ -10,9 +10,9 @@ Supported sites: **TVP VOD** (`tvp`).
 
 > Proof of concept: minimal features, and jobs are kept in memory only.
 
-## Run
+## Install and run
 
-Requires Go 1.27+ to build and `ffmpeg` at runtime.
+To build from source, use Go 1.27+ and install `ffmpeg` for runtime use.
 
 ```sh
 go build -o vodarr ./cmd/vodarr
@@ -63,3 +63,13 @@ Implement `provider.Provider` (`internal/provider/provider.go`) in a new package
 - resolves an ID to a stream URL ffmpeg can open, at download time.
 
 Everything else is shared.
+
+## Development
+
+`make test` runs formatting checks, vet, and race tests. Install ffmpeg with the
+libx264 encoder to run the download-engine tests. `make docker-smoke` builds the
+container and checks startup and both APIs.
+
+## License
+
+[BSD-3-Clause](LICENSE).

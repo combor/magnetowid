@@ -1,0 +1,160 @@
+version: 2
+
+project_name: vodarr
+
+release:
+  prerelease: auto
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: vodarr
+    main: ./cmd/vodarr
+    binary: vodarr
+    env:
+      - CGO_ENABLED=0
+    mod_timestamp: '{{ .CommitTimestamp }}'
+    flags:
+      - -trimpath
+    ldflags:
+      - '-s -w -X main.version={{.Version}}'
+    goos:
+      - darwin
+      - linux
+      - windows
+      - freebsd
+      - openbsd
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      sign:
+        certificate: '{{ .Env.MACOS_SIGN_P12 }}'
+        password: '{{ .Env.MACOS_SIGN_PASSWORD }}'
+      notarize:
+        issuer_id: '{{ .Env.MACOS_NOTARY_ISSUER_ID }}'
+        key_id: '{{ .Env.MACOS_NOTARY_KEY_ID }}'
+        key: '{{ .Env.MACOS_NOTARY_KEY }}'
+        # Waiting for Apple's verdict keeps a rejected binary out of the archives.
+        wait: true
+        timeout: 20m
+
+archives:
+  - id: vodarr
+    formats:
+      - tar.gz
+    name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
+  algorithm: sha256
+
+nfpms:
+  - id: vodarr
+    package_name: vodarr
+    ids:
+      - vodarr
+    vendor: combor
+    homepage: https://github.com/combor/vodarr
+    maintainer: 'combor <163394+combor@users.noreply.github.com>'
+    description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
+    license: BSD-3-Clause
+    section: video
+    formats:
+      - deb
+      - rpm
+    bindir: /usr/bin
+    dependencies:
+      - ca-certificates
+      - ffmpeg
+    rpm:
+      signature:
+        key_file: '{{ if isEnvSet "GPG_KEY_PATH" }}{{ .Env.GPG_KEY_PATH }}{{ end }}'
+    contents:
+      - src: LICENSE
+        dst: /usr/share/licenses/vodarr/LICENSE
+        packager: rpm
+      - src: LICENSE
+        dst: /usr/share/doc/vodarr/copyright
+        packager: deb
+
+aurs:
+  - name: vodarr-bin
+    homepage: https://github.com/combor/vodarr
+    description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
+    license: BSD-3-Clause
+    maintainers:
+      - 'combor <163394+combor@users.noreply.github.com>'
+    private_key: '{{ .Env.AUR_KEY }}'
+    git_url: 'ssh://aur@aur.archlinux.org/vodarr-bin.git'
+    skip_upload: auto
+    provides:
+      - vodarr
+    conflicts:
+      - vodarr
+    depends:
+      - ca-certificates
+      - ffmpeg
+    package: |-
+      install -Dm755 "./vodarr" "${pkgdir}/usr/bin/vodarr"
+      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/vodarr-bin/LICENSE"
+
+homebrew_casks:
+  - name: vodarr
+    homepage: https://github.com/combor/vodarr
+    description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
+    dependencies:
+      - formula: ffmpeg
+    repository:
+      owner: combor
+      name: homebrew-tap
+      branch: main
+      token: '{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}'
+    skip_upload: auto
+
+scoops:
+  - name: vodarr
+    homepage: https://github.com/combor/vodarr
+    description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
+    license: BSD-3-Clause
+    depends:
+      - ffmpeg
+    repository:
+      owner: combor
+      name: scoop-bucket
+      branch: main
+      token: '{{ .Env.SCOOP_BUCKET_GITHUB_TOKEN }}'
+    skip_upload: auto
+
+nix:
+  - name: vodarr
+    homepage: https://github.com/combor/vodarr
+    description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
+    license: bsd3
+    main_program: vodarr
+    # The default install script wraps vodarr with ffmpeg on PATH.
+    dependencies:
+      - ffmpeg
+    extra_install: |-
+      install -Dm644 ./LICENSE "$out/share/licenses/vodarr/LICENSE"
+    repository:
+      owner: combor
+      name: nur
+      branch: main
+      token: '{{ .Env.NUR_GITHUB_TOKEN }}'
+    skip_upload: auto
+
+changelog:
+  disable: true
