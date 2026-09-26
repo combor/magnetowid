@@ -69,8 +69,7 @@ func call(t *testing.T, srv *httptest.Server, params url.Values) map[string]any 
 	return out
 }
 
-// addFile uploads an NZB the way Sonarr/Radarr do: POST multipart field
-// "name", with mode/cat/apikey in the query string.
+// addFile uploads an NZB the way Sonarr/Radarr do.
 func addFile(t *testing.T, srv *httptest.Server, filename string, body []byte) map[string]any {
 	t.Helper()
 	var buf bytes.Buffer

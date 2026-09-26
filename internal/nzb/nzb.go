@@ -1,9 +1,5 @@
-// Package nzb wraps a vodarr job reference in an NZB document.
-//
-// Sonarr and Radarr download the NZB from the indexer and upload the same
-// bytes to the download client, so the NZB is how a job reaches vodarr's
-// SABnzbd endpoint. They reject an NZB without a <file> element, so one
-// placeholder file is included; it is never fetched.
+// Package nzb wraps a vodarr job reference in an NZB document, which
+// Sonarr/Radarr pass unchanged from the indexer to the download client.
 package nzb
 
 import (
@@ -21,16 +17,14 @@ const (
 // ErrNotVodarr is returned by Decode for NZBs that carry no vodarr reference.
 var ErrNotVodarr = errors.New("nzb: not a vodarr job")
 
-// Ref identifies content on a provider. It never holds a stream URL: those
-// expire and are resolved at download time.
+// Ref identifies content on a provider.
 type Ref struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
-	Duration int    `json:"duration,omitempty"` // seconds, 0 if unknown
+	Duration int    `json:"duration,omitempty"` // seconds
 }
 
-// XMLName is untagged so Encode can set the namespace and Decode accepts the
-// root with or without it (checked by hand in Decode).
+// XMLName is untagged so Encode can set the namespace and Decode accepts any.
 type document struct {
 	XMLName xml.Name
 	Head    head   `xml:"head"`

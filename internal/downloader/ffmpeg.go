@@ -17,33 +17,24 @@ import (
 	"github.com/combor/vodarr/internal/provider"
 )
 
-// FFmpeg is an Engine that lets ffmpeg fetch the stream (HLS, DASH, ...) and
-// remux it losslessly into MP4. For HLS master playlists vodarr picks the
-// best video variant and its audio rendition itself (see pickInputs);
-// otherwise ffmpeg's default stream selection picks the highest-resolution
-// video and the best audio track.
+// FFmpeg is an Engine that has ffmpeg fetch the stream and remux it into MP4.
 type FFmpeg struct {
 	Path   string       // binary; "ffmpeg" if empty
-	Client *http.Client // fetches HLS master playlists; a 30s-timeout client if nil
-	// StallTimeout kills ffmpeg when no media arrives for this long (a CDN
-	// can accept a connection and then go silent). Long enough to cover the
-	// final +faststart pass, which rewrites the file without progress.
-	// 5 minutes if zero.
+	Client *http.Client // for HLS master playlists; defaultClient if nil
+	// StallTimeout kills ffmpeg when no data arrives for this long; 5 minutes
+	// if zero, to cover the +faststart pass, which reports no progress.
 	StallTimeout time.Duration
 }
 
-// ffmpeg logs these (as warnings or errors) when it drops data yet carries
-// on and exits 0, so a download that logs one is incomplete. A segment the
-// server truncates but serves with a matching Content-Length can still slip
-// through silently; HLS has no checksums to catch that.
+// ffmpeg logs these when it drops data but still exits 0.
 var dataLossMessages = []string{
 	"Failed to open segment",
 	"failed too many times, skipping",
 	"Stream ends prematurely",
 	"Failed to reload playlist",
 	"partial file",
-	"Packet corrupt",          // e.g. MPEG-TS segment missing transport packets
-	"corrupt input packet in", // ffmpeg's own report of the same
+	"Packet corrupt",
+	"corrupt input packet in",
 }
 
 func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string, progress func(time.Duration, int64)) error {
@@ -63,20 +54,19 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	if err != nil {
 		return err
 	}
-	// Cancelling with a cause kills ffmpeg and records why (stall, data loss).
 	ctx, cancel := context.WithCancelCause(parent)
 	defer cancel(nil)
 
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "warning", "-y"}
 	for _, in := range inputs {
-		args = append(args, headerArgs(s.Header)...) // input options apply per input
+		args = append(args, headerArgs(s.Header)...)
 		args = append(args, "-i", in)
 	}
 	if len(inputs) == 2 {
 		args = append(args, "-map", "0:v:0", "-map", "1:a:0")
 	}
 	args = append(args,
-		"-sn", "-dn", // subtitle/data streams can't always be copied into MP4
+		"-sn", "-dn", // not all subtitle/data streams fit in MP4
 		"-c", "copy",
 		"-movflags", "+faststart",
 		"-progress", "pipe:1", "-nostats",
@@ -178,8 +168,7 @@ func headerArgs(h http.Header) []string {
 	return args
 }
 
-// readProgress parses ffmpeg's "-progress" key=value blocks, reporting once
-// per block.
+// readProgress parses ffmpeg's -progress output.
 func readProgress(r io.Reader, progress func(time.Duration, int64)) {
 	var done time.Duration
 	var size int64

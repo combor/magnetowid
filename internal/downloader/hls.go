@@ -17,14 +17,12 @@ import (
 
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
-// Codec prefixes (RFC 6381) that mark a variant as carrying video.
+// RFC 6381 codec prefixes of video codecs.
 var videoCodecs = []string{"avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe", "vp09", "av01", "mp4v"}
 
-// pickInputs returns the URLs ffmpeg should read. Given an HLS master
-// playlist, ffmpeg would download the start of every variant before choosing
-// one (seconds of sequential requests), so vodarr chooses instead: the
-// highest-resolution video variant and its audio rendition, if separate.
-// Anything else (media playlists, DASH, files) is passed through unchanged.
+// pickInputs returns the URLs ffmpeg should read. For an HLS master playlist
+// it picks the best video variant and its audio rendition, since ffmpeg would
+// otherwise probe every variant first. Other URLs are passed through.
 func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]string, error) {
 	base, err := url.Parse(s.URL)
 	if err != nil || !strings.HasSuffix(strings.ToLower(base.Path), ".m3u8") {
@@ -56,7 +54,7 @@ func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]
 	if !ok {
 		return []string{s.URL}, nil
 	}
-	base = resp.Request.URL // relative URIs are relative to the playlist after redirects
+	base = resp.Request.URL // after redirects
 	inputs := []string{resolve(base, video)}
 	if audio != "" {
 		inputs = append(inputs, resolve(base, audio))
@@ -77,9 +75,9 @@ type rendition struct {
 	isDefault, autoPick bool
 }
 
-// selectRenditions picks from a master playlist the best video variant URI
-// and, when audio comes as a separate rendition, its URI. ok is false when
-// the playlist is not a master playlist or has no usable variant.
+// selectRenditions returns the best video variant URI and its separate audio
+// rendition URI, if any. ok is false for anything but a usable master
+// playlist.
 func selectRenditions(playlist string) (video, audio string, ok bool) {
 	var variants []variant
 	var audios []rendition
@@ -128,9 +126,8 @@ func selectRenditions(playlist string) (video, audio string, ok bool) {
 	return best.uri, pickAudio(audios, best.audio), true
 }
 
-// pickAudio returns the URI of the group's DEFAULT rendition, else its
-// AUTOSELECT one, else its first. "" means audio is muxed into the variant:
-// either the group is empty or the chosen rendition has no URI.
+// pickAudio returns the URI of the group's DEFAULT, else AUTOSELECT, else
+// first rendition. "" means the audio is muxed into the variant.
 func pickAudio(audios []rendition, group string) string {
 	if group == "" {
 		return ""
@@ -160,8 +157,7 @@ func pickAudio(audios []rendition, group string) string {
 	return ""
 }
 
-// hasVideo reports whether CODECS names a video codec. Variants without
-// CODECS are assumed to carry video.
+// hasVideo reports whether CODECS names a video codec; an empty CODECS counts.
 func hasVideo(codecs string) bool {
 	if codecs == "" {
 		return true
@@ -187,8 +183,7 @@ func pixels(resolution string) int {
 	return wi * hi
 }
 
-// parseAttrs parses an HLS attribute list: KEY=VALUE pairs separated by
-// commas, where quoted values may contain commas.
+// parseAttrs parses an HLS attribute list.
 func parseAttrs(s string) map[string]string {
 	attrs := map[string]string{}
 	for s != "" {

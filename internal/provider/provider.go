@@ -1,6 +1,4 @@
-// Package provider defines the contract between vodarr and the VOD sites it
-// can search and download from. Each site lives in its own subpackage and is
-// registered in main.
+// Package provider defines the interface each VOD site implements.
 package provider
 
 import (
@@ -17,7 +15,7 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Kind says whether a query or item is a movie or a TV episode.
+// Kind is a movie or a TV episode.
 type Kind int
 
 const (
@@ -38,38 +36,37 @@ func (k Kind) String() string {
 // Query is a title search as sent by Sonarr or Radarr.
 type Query struct {
 	Kind    Kind
-	Title   string // q as sent by Sonarr/Radarr (trailing year stripped for movies)
+	Title   string // the *arr's q, without a trailing year for movies
 	Year    int    // 0 = unknown
-	Season  int    // episodes; 0 = unspecified
-	Episode int    // 0 = whole season
+	Season  int
+	Episode int // 0 = whole season
 }
 
 // Item is a search hit that can be offered as a release.
 type Item struct {
-	ID                    string // provider-stable; must be enough for Resolve
+	ID                    string // passed to Resolve
 	Kind                  Kind
-	Title                 string        // provider's own title (logging only)
-	Year, Season, Episode int           // in *arr numbering (the provider maps its own)
-	Duration              time.Duration // size estimate + progress
+	Title                 string // provider's title, for logs
+	Year, Season, Episode int    // *arr numbering
+	Duration              time.Duration
 	Published             time.Time
 }
 
 // Stream is what the download engine fetches.
 type Stream struct {
-	URL    string      // anything ffmpeg can open: HLS master/media, DASH MPD, file URL
-	Header http.Header // optional extra request headers
+	URL    string // anything ffmpeg can open
+	Header http.Header
 }
 
 // Provider is one VOD site.
 type Provider interface {
-	Name() string                                           // "tvp": URL path + release group
-	Search(ctx context.Context, q Query) ([]Item, error)    // empty slice = no match
+	Name() string // URL path and release group, e.g. "tvp"
+	Search(ctx context.Context, q Query) ([]Item, error)
 	Resolve(ctx context.Context, id string) (Stream, error) // called at download time
 }
 
-// ErrUnavailable means the content exists but cannot be downloaded (DRM,
-// geo-blocked, paid, ...). Providers wrap it with the reason; the downloader
-// does not retry it.
+// ErrUnavailable marks content that can't be downloaded (DRM, geo-blocked,
+// paid). It is not retried.
 var ErrUnavailable = errors.New("content unavailable")
 
 // Registry maps provider names to providers.
@@ -113,14 +110,11 @@ var foldLetters = strings.NewReplacer(
 	"&", " and ",
 )
 
-// NormalizeTitle reduces a title to a form that compares equal across the
-// site's catalogue and the *arr query, raw or cleaned: lowercase, no
-// diacritics, "&" as "and", no apostrophes or periods, no leading "the", and
-// every other run of non-alphanumerics collapsed to one space.
+// NormalizeTitle makes titles comparable the way Sonarr/Radarr clean them:
+// lowercase, no diacritics or punctuation, "&" as "and", no leading "the".
 func NormalizeTitle(s string) string {
 	s = foldLetters.Replace(s)
-	// A chained transformer holds state, so it can't be shared between the
-	// concurrent requests that call this.
+	// Not safe for concurrent use, so built per call.
 	stripMarks := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
 	if folded, _, err := transform.String(stripMarks, s); err == nil {
 		s = folded

@@ -57,8 +57,7 @@ func get(t *testing.T, srv *httptest.Server, path string, params url.Values) str
 	return string(body)
 }
 
-// feedItem decodes the fields Sonarr/Radarr read, with newznab attributes
-// resolved by namespace the way their XML parser does.
+// feedItem holds the fields Sonarr/Radarr read.
 type feedItem struct {
 	Title     string `xml:"title"`
 	GUID      string `xml:"guid"`
@@ -195,8 +194,8 @@ func TestEpisodeSearchNeedsSeason(t *testing.T) {
 	}
 }
 
-// Radarr's title search is t=search&q=<title> <year> with movie categories.
-// The release must carry Radarr's year, not the site's.
+// Radarr searches with t=search and movie categories; the release keeps
+// Radarr's year, not the site's.
 func TestMovieSearchViaSearch(t *testing.T) {
 	fp := &fakeProvider{items: []provider.Item{{ID: "296079", Kind: provider.Movie, Year: 1970}}}
 	srv := newServer(t, fp)
@@ -277,8 +276,7 @@ func TestSplitYear(t *testing.T) {
 	}
 }
 
-// Sonarr asks for the next offset whenever a page is full, so results must
-// be paged rather than repeated.
+// Sonarr asks for the next offset whenever a page is full.
 func TestSearchPaging(t *testing.T) {
 	fp := &fakeProvider{}
 	for i := 1; i <= 150; i++ {

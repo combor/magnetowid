@@ -22,8 +22,7 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
-// Mirrors the checks Sonarr/Radarr run before handing an NZB to the client:
-// root element "nzb" in the newzbin namespace and at least one <file> in it.
+// Sonarr/Radarr require an "nzb" root in the newzbin namespace with a <file>.
 func TestEncodePassesArrValidation(t *testing.T) {
 	b, err := Encode(Ref{Provider: "tvp", ID: "1"})
 	if err != nil {

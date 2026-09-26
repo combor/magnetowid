@@ -1,5 +1,4 @@
-// Package newznab exposes each provider as a Newznab indexer at
-// /{provider}/api so Sonarr and Radarr can search it.
+// Package newznab serves each provider as a Newznab indexer.
 package newznab
 
 import (
@@ -17,7 +16,7 @@ import (
 	"github.com/combor/vodarr/internal/provider"
 )
 
-// bytesPerSecond estimates release size (4 Mbit/s); sites don't publish sizes.
+// bytesPerSecond estimates release size (4 Mbit/s).
 const bytesPerSecond = 4_000_000 / 8
 
 // maxResults is the page size advertised in caps.
@@ -30,8 +29,7 @@ const (
 	catTVHD     = 5040
 )
 
-// Handler serves the Newznab API for every registered provider. Mount it at
-// "/{provider}/api".
+// Handler serves the Newznab API. Mount it at "/{provider}/api".
 type Handler struct {
 	Providers *provider.Registry
 	APIKey    string
@@ -46,7 +44,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	t := q.Get("t")
-	// caps is public, as on most Newznab indexers; everything else needs the key.
+	// caps is public, as on most Newznab indexers.
 	if t != "caps" && q.Get("apikey") != h.APIKey {
 		writeError(w, 100, "Incorrect user credentials")
 		return
@@ -68,8 +66,8 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	movie := t == "movie" || (t == "search" && hasMovieCategory(q.Get("cat")))
 	text := strings.TrimSpace(q.Get("q"))
 	if text == "" {
-		// RSS sync and the indexer test: the test fails on an empty feed, and
-		// real items would risk wrong grabs, so return one unparseable item.
+		// RSS sync and the indexer test, which fails on an empty feed. An
+		// unparseable placeholder can never be grabbed.
 		writeXML(w, h.feed(p, []item{h.placeholder(r, p, movie)}))
 		return
 	}
@@ -81,13 +79,13 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	} else {
 		season, err := strconv.Atoi(q.Get("season"))
 		if err != nil || season <= 0 {
-			writeXML(w, h.feed(p, nil)) // episode search needs a season
+			writeXML(w, h.feed(p, nil))
 			return
 		}
 		episode := 0
 		if ep := q.Get("ep"); ep != "" {
 			if episode, err = strconv.Atoi(ep); err != nil || episode <= 0 {
-				writeXML(w, h.feed(p, nil)) // e.g. daily "MM/dd": not supported
+				writeXML(w, h.feed(p, nil)) // daily "MM/dd" is not supported
 				return
 			}
 		}
@@ -103,8 +101,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	h.Log.Info("search", "provider", p.Name(), "kind", query.Kind, "title", query.Title,
 		"year", query.Year, "season", query.Season, "episode", query.Episode, "results", len(found))
 
-	// Page like a real indexer: Sonarr/Radarr ask for the next offset
-	// whenever a page comes back full.
+	// Sonarr/Radarr ask for the next offset whenever a page is full.
 	found = page(found, q.Get("offset"), q.Get("limit"))
 	items := make([]item, 0, len(found))
 	for _, it := range found {
@@ -130,9 +127,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, p provider.Provide
 	w.Write(body)
 }
 
-// release turns a provider item into a Newznab item. The title reuses the
-// *arr's own query title so the release parses back to the same series or
-// movie; automatic imports are blocked for releases matched only by ID.
+// release turns a provider item into a Newznab item.
 func (h *Handler) release(r *http.Request, p provider.Provider, q provider.Query, it provider.Item) item {
 	secs := int(it.Duration / time.Second)
 	link := h.nzbLink(r, p, it.ID, secs)
@@ -175,9 +170,9 @@ func (h *Handler) placeholder(r *http.Request, p provider.Provider, movie bool) 
 	}
 }
 
-// ReleaseTitle builds a scene-style release name from the *arr's query title.
-// Movies use the year from the query when present: Radarr needs the exact
-// year and sites often differ by one.
+// ReleaseTitle builds a release name from the *arr's own query title and
+// year, so the release matches by title: Sonarr/Radarr won't auto-import a
+// release matched only by ID.
 func ReleaseTitle(providerName string, q provider.Query, it provider.Item) string {
 	title := strings.Join(strings.Fields(q.Title), ".")
 	group := strings.ToUpper(providerName)
@@ -202,9 +197,8 @@ func (h *Handler) nzbLink(r *http.Request, p provider.Provider, id string, secs 
 	return h.baseURL(r, p) + "?" + v.Encode()
 }
 
-// baseURL is the URL Sonarr/Radarr reached this indexer at, so NZB links
-// work behind a reverse proxy that terminates TLS (X-Forwarded-Proto/Host).
-// The headers only shape links in the caller's own response.
+// baseURL is the URL the caller reached this indexer at, honouring a
+// TLS-terminating reverse proxy.
 func (h *Handler) baseURL(r *http.Request, p provider.Provider) string {
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(firstValue(r.Header.Get("X-Forwarded-Proto")), "https") {
@@ -217,15 +211,13 @@ func (h *Handler) baseURL(r *http.Request, p provider.Provider) string {
 	return scheme + "://" + host + "/" + p.Name() + "/api"
 }
 
-// firstValue returns the first of a comma-separated header value, as set by
-// a chain of proxies.
+// firstValue returns the first entry of a comma-separated header value.
 func firstValue(v string) string {
 	first, _, _ := strings.Cut(v, ",")
 	return strings.TrimSpace(first)
 }
 
-// page applies Newznab offset/limit; limit defaults to and is capped at the
-// advertised maxResults.
+// page applies Newznab offset and limit, capping limit at maxResults.
 func page(items []provider.Item, offset, limit string) []provider.Item {
 	off, _ := strconv.Atoi(offset)
 	lim, err := strconv.Atoi(limit)
@@ -273,8 +265,6 @@ func pubDate(t time.Time) string {
 	return t.UTC().Format(time.RFC1123Z)
 }
 
-// --- XML documents ---
-
 type capsDoc struct {
 	XMLName    xml.Name      `xml:"caps"`
 	Server     capsServer    `xml:"server"`
@@ -298,8 +288,8 @@ type capsSearching struct {
 	MovieSearch capsSearch `xml:"movie-search"`
 }
 
-// SearchEngine "raw" makes Sonarr/Radarr send titles as-is instead of cleaned
-// ("The Killing" would otherwise arrive as "Killing").
+// SearchEngine "raw" makes Sonarr/Radarr send titles uncleaned ("The
+// Killing", not "Killing").
 type capsSearch struct {
 	Available       string `xml:"available,attr"`
 	SupportedParams string `xml:"supportedParams,attr"`

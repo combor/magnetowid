@@ -1,5 +1,4 @@
-// Package sabnzbd implements the subset of the SABnzbd API that Sonarr and
-// Radarr use, so vodarr can be added to them as a SABnzbd download client.
+// Package sabnzbd implements the part of the SABnzbd API Sonarr and Radarr use.
 package sabnzbd
 
 import (
@@ -17,13 +16,13 @@ import (
 	"github.com/combor/vodarr/internal/nzb"
 )
 
-// version is what Sonarr/Radarr's connection test checks (≥ 0.7).
+// version must be ≥ 0.7 for Sonarr/Radarr.
 const version = "4.5.1"
 
 // bytesPerSecond estimates job size before ffmpeg reports any (4 Mbit/s).
 const bytesPerSecond = 4_000_000 / 8
 
-// maxBodyBytes caps request bodies, i.e. NZB uploads.
+// maxBodyBytes caps NZB uploads.
 const maxBodyBytes = 4 << 20
 
 // Handler serves the SABnzbd API. Mount it at "/api".
@@ -35,10 +34,7 @@ type Handler struct {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	// Sonarr/Radarr put apikey in the query string, so check it there before
-	// reading any body. FormValue parses multipart bodies (addfile) and merges
-	// them with the query; the cap keeps a big upload from filling memory or
-	// disk (vodarr's NZBs are tiny).
+	// Check a query-string key before reading the (capped) body.
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	key := r.URL.Query().Get("apikey")
 	if key == "" {
@@ -88,7 +84,7 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ref, err := nzb.Decode(data)
 	if err != nil {
-		// A real NZB routed here by mistake; refuse it so the *arr tries elsewhere.
+		// Not a vodarr NZB; refusing it lets the *arr try elsewhere.
 		h.Log.Warn("rejected NZB", "file", header.Filename, "err", err)
 		writeJSON(w, errorResponse(err.Error()))
 		return
@@ -133,8 +129,7 @@ type category struct {
 	Priority int    `json:"priority"`
 }
 
-// config is what the connection test inspects: categories must exist with a
-// plain dir, and sorting must be off.
+// config passes the connection test: categories exist, sorting is off.
 func (h *Handler) config() map[string]any {
 	cats := []category{{Name: "*", PP: "3", Script: "None", Dir: ""}}
 	for i, c := range h.Categories {
@@ -234,8 +229,7 @@ func (h *Handler) history(cat string) map[string]any {
 	return map[string]any{"noofslots": len(slots), "slots": slots}
 }
 
-// estimatedSize extrapolates from bytes written so far, or guesses from the
-// duration before ffmpeg has reported anything.
+// estimatedSize extrapolates from progress, or guesses from the duration.
 func estimatedSize(j downloader.Job) int64 {
 	if j.Fraction > 0.01 && j.Bytes > 0 {
 		return int64(float64(j.Bytes) / j.Fraction)

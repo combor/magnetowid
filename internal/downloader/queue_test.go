@@ -39,8 +39,7 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	return provider.Stream{URL: fmt.Sprintf("http://example.invalid/%s/%d.m3u8", id, f.resolves)}, nil
 }
 
-// fakeEngine fails the first `fail` calls, and every call for a stream URL
-// containing failURL, then writes a small file.
+// fakeEngine fails the first fail calls and any stream URL containing failURL.
 type fakeEngine struct {
 	mu      sync.Mutex
 	calls   int
@@ -209,14 +208,12 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
-// An importer may remove a completed folder but keep the job record; a new
-// job with the same name must not reuse that path, or deleting the old
-// record with its files would delete the new download.
+// A folder the importer removed is not reused while its job record exists.
 func TestNoReuseOfRecordedStorage(t *testing.T) {
 	q := startQueue(t, &fakeProvider{}, &fakeEngine{})
 	ref := nzb.Ref{Provider: "fake", ID: "1"}
 	first := waitFinished(t, q, q.Add("Show.S01E01", "Show.S01E01.nzb", "tv", ref))
-	if err := os.RemoveAll(first.Storage); err != nil { // the importer moved it away
+	if err := os.RemoveAll(first.Storage); err != nil {
 		t.Fatal(err)
 	}
 	second := waitFinished(t, q, q.Add("Show.S01E01", "Show.S01E01.nzb", "tv", ref))

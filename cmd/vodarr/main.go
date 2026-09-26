@@ -1,5 +1,5 @@
 // Command vodarr serves VOD sites to Sonarr and Radarr as Newznab indexers
-// (/{provider}/api) and a SABnzbd download client (/api).
+// and a SABnzbd download client.
 package main
 
 import (
@@ -48,8 +48,15 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o777); err != nil {
 		return err
+	}
+	cats := splitList(*categories)
+	// Sonarr/Radarr's health check expects the category folders to exist.
+	for _, c := range cats {
+		if err := os.MkdirAll(filepath.Join(dir, downloader.SanitizeName(c)), 0o777); err != nil {
+			return err
+		}
 	}
 	if _, err := exec.LookPath(*ffmpeg); err != nil {
 		return fmt.Errorf("ffmpeg not found: %w", err)
@@ -64,7 +71,7 @@ func run(log *slog.Logger) error {
 	queue := downloader.New(dir, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)
 	mux := http.NewServeMux()
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Log: log})
-	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: splitList(*categories), Log: log})
+	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -85,14 +92,14 @@ func run(log *slog.Logger) error {
 	case <-ctx.Done():
 		log.Info("shutting down")
 	}
-	stop() // cancels a running download: ffmpeg is killed and its work dir removed
+	stop()
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil && serveErr == nil {
 		serveErr = err
 	}
-	// Wait for the worker so ffmpeg isn't left running after vodarr exits.
+	// Wait for the worker so ffmpeg isn't orphaned.
 	select {
 	case <-workerDone:
 	case <-time.After(30 * time.Second):
@@ -104,8 +111,7 @@ func run(log *slog.Logger) error {
 	return serveErr
 }
 
-// logRequests logs each request without its query string, which carries the
-// API key.
+// logRequests logs requests without the query string, which holds the API key.
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()

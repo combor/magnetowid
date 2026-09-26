@@ -1,5 +1,4 @@
-// Package tvp is the provider for TVP VOD (https://vod.tvp.pl), Telewizja
-// Polska's video-on-demand site. Its catalogue API needs no login.
+// Package tvp is the provider for TVP VOD (https://vod.tvp.pl).
 package tvp
 
 import (
@@ -37,8 +36,7 @@ func New(client *http.Client, log *slog.Logger) *Provider {
 
 func (p *Provider) Name() string { return "tvp" }
 
-// product is the subset of TVP's product JSON (serials, seasons, episodes,
-// movies) that vodarr uses.
+// product is a TVP serial, season, episode or movie.
 type product struct {
 	ID            int64  `json:"id"`
 	Type          string `json:"type"`
@@ -61,12 +59,8 @@ func (p *Provider) Search(ctx context.Context, q provider.Query) ([]provider.Ite
 	return nil, nil
 }
 
-// searchEpisodes finds the serial by exact title, then maps the *arr's
-// season/episode onto TVP's numbers. TVP often numbers episodes across
-// seasons (Ranczo's season 2 is 14-26), so episode N of a season is TVP
-// number start+N-1, where start is where the season begins. Gaps and
-// duplicate numbers never shift other episodes: a missing number yields no
-// result rather than the next episode under the wrong name.
+// searchEpisodes maps the *arr's season/episode onto TVP's episode numbers,
+// which often run across seasons (Ranczo's season 2 is 14-26).
 func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]provider.Item, error) {
 	if q.Season <= 0 {
 		return nil, nil
@@ -84,14 +78,25 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 	if err := p.get(ctx, fmt.Sprintf("vods/serials/%d/seasons", serial.ID), nil, &seasons); err != nil {
 		return nil, err
 	}
-	season, ok := findSeason(seasons, q.Season)
-	if !ok {
+	var episodes []product
+	if season, ok := findSeason(seasons, q.Season); ok {
+		if episodes, err = p.episodes(ctx, serial.ID, season.ID); err != nil {
+			return nil, err
+		}
+		items, err := p.bySeason(ctx, serial, seasons, q, episodes)
+		if err != nil || len(items) > 0 || q.Episode == 0 {
+			return items, err
+		}
+	}
+	if q.Episode == 0 {
 		return nil, nil
 	}
-	episodes, err := p.episodes(ctx, serial.ID, season.ID)
-	if err != nil {
-		return nil, err
-	}
+	return p.byAbsoluteNumber(ctx, serial, seasons, q, episodes)
+}
+
+// bySeason maps episode N of the season to TVP number start+N-1, so gaps
+// and duplicates never shift other episodes.
+func (p *Provider) bySeason(ctx context.Context, serial product, seasons []product, q provider.Query, episodes []product) ([]provider.Item, error) {
 	start, ok, err := p.seasonStart(ctx, serial.ID, seasons, q.Season, episodes)
 	if err != nil {
 		return nil, err
@@ -101,7 +106,6 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 			"serial", serial.Title, "season", q.Season)
 		return nil, nil
 	}
-
 	count := map[int]int{}
 	for _, e := range episodes {
 		count[e.Number]++
@@ -110,27 +114,119 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 	for _, e := range episodes {
 		ep := e.Number - start + 1
 		if count[e.Number] > 1 || ep < 1 || (q.Episode != 0 && ep != q.Episode) || e.Payable {
-			continue // duplicate numbers are ambiguous
+			continue
 		}
-		items = append(items, provider.Item{
-			ID:        strconv.FormatInt(e.ID, 10),
-			Kind:      provider.Episode,
-			Title:     serial.Title + " – " + e.Title,
-			Year:      e.Year,
-			Season:    q.Season,
-			Episode:   ep,
-			Duration:  time.Duration(e.Duration) * time.Second,
-			Published: parseTime(e.Since),
-		})
+		items = append(items, episodeItem(serial, e, q.Season, ep))
 	}
 	return items, nil
 }
 
-// seasonStart returns the TVP number of the season's first episode, when it
-// can be told for sure: 1 if the season's numbers start at 1 (per-season
-// numbering, or the first season), or the number right after the previous
-// season's last one if the season starts there. Otherwise the first episode
-// may be missing, or the previous season may be incomplete, so ok is false.
+// byAbsoluteNumber handles absolute episode numbers in an arbitrary season
+// (TVDB's Klan S15E2113 is TVP's number 2113, in its season 22). It needs the
+// number to be above every TVP number in that season, TVP's numbering to run
+// on across seasons, and exactly one match; anything unclear yields nothing.
+func (p *Provider) byAbsoluteNumber(ctx context.Context, serial product, seasons []product, q provider.Query, seasonEpisodes []product) ([]provider.Item, error) {
+	sorted := append([]product(nil), seasons...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Number < sorted[j].Number })
+
+	// The requested season sets the ceiling; if TVP lacks it, the closest below.
+	idx, ceil := -1, seasonEpisodes
+	for i := len(sorted) - 1; i >= 0; i-- {
+		if len(ceil) > 0 && sorted[i].Number == q.Season {
+			idx = i
+			break
+		}
+		if len(ceil) == 0 && sorted[i].Number < q.Season {
+			eps, err := p.episodes(ctx, serial.ID, sorted[i].ID)
+			if err != nil {
+				return nil, err
+			}
+			if len(eps) > 0 {
+				idx, ceil = i, eps
+				break
+			}
+		}
+	}
+	if idx < 0 {
+		return nil, nil
+	}
+	lastMax := ceil[len(ceil)-1].Number
+	if q.Episode <= lastMax {
+		return nil, nil
+	}
+
+	// Absolute numbering: every season starts above the previous one's last
+	// number. Anything else (restarts, overlaps) ends the search.
+	for i := idx - 1; i >= 0; i-- {
+		prev, err := p.episodes(ctx, serial.ID, sorted[i].ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(prev) == 0 {
+			continue
+		}
+		if ceil[0].Number <= prev[len(prev)-1].Number {
+			return nil, nil
+		}
+		break
+	}
+	var match []product
+	for _, s := range sorted[idx+1:] {
+		eps, err := p.episodes(ctx, serial.ID, s.ID)
+		if err != nil {
+			return nil, err
+		}
+		if len(eps) == 0 {
+			continue
+		}
+		if eps[0].Number <= lastMax {
+			if hasNumber(eps, q.Episode) {
+				return nil, nil
+			}
+			break
+		}
+		if eps[0].Number > q.Episode {
+			break
+		}
+		for _, e := range eps {
+			if e.Number == q.Episode {
+				match = append(match, e)
+			}
+		}
+		lastMax = eps[len(eps)-1].Number
+	}
+	if len(match) != 1 || match[0].Payable {
+		return nil, nil
+	}
+	p.log.Info("matched TVP episode by absolute number", "serial", serial.Title,
+		"season", q.Season, "episode", q.Episode)
+	return []provider.Item{episodeItem(serial, match[0], q.Season, q.Episode)}, nil
+}
+
+func hasNumber(eps []product, n int) bool {
+	for _, e := range eps {
+		if e.Number == n {
+			return true
+		}
+	}
+	return false
+}
+
+func episodeItem(serial, e product, season, episode int) provider.Item {
+	return provider.Item{
+		ID:        strconv.FormatInt(e.ID, 10),
+		Kind:      provider.Episode,
+		Title:     serial.Title + " – " + e.Title,
+		Year:      e.Year,
+		Season:    season,
+		Episode:   episode,
+		Duration:  time.Duration(e.Duration) * time.Second,
+		Published: parseTime(e.Since),
+	}
+}
+
+// seasonStart returns the TVP number of the season's first episode when it
+// is certain: 1, or right after the previous season's last number.
 func (p *Provider) seasonStart(ctx context.Context, serialID int64, seasons []product, number int, episodes []product) (start int, ok bool, err error) {
 	if len(episodes) == 0 {
 		return 0, false, nil
@@ -162,8 +258,7 @@ func findSeason(seasons []product, number int) (product, bool) {
 	return product{}, false
 }
 
-// episodes returns a season's numbered episodes sorted by number; specials
-// (numbered 0 or -1) are left out.
+// episodes returns a season's episodes sorted by number, without specials.
 func (p *Provider) episodes(ctx context.Context, serialID, seasonID int64) ([]product, error) {
 	var all []product
 	if err := p.get(ctx, fmt.Sprintf("vods/serials/%d/seasons/%d/episodes", serialID, seasonID), nil, &all); err != nil {
@@ -205,8 +300,7 @@ func (p *Provider) searchMovies(ctx context.Context, q provider.Query) ([]provid
 	return items, nil
 }
 
-// pick returns the first free serial whose title matches exactly; TVP's
-// search is fuzzy and ranks by relevance.
+// pick returns the first free serial whose title matches exactly.
 func (p *Provider) pick(serials []product, q provider.Query) (product, bool) {
 	want := provider.NormalizeTitle(q.Title)
 	var matches []product
@@ -237,8 +331,8 @@ func (p *Provider) search(ctx context.Context, kind, keyword string) ([]product,
 	return res.Items, err
 }
 
-// Resolve asks TVP for the current stream. Stream URLs embed the requester's
-// IP and a date, so they are only valid for an immediate download.
+// Resolve returns the current stream URL. It embeds the requester's IP and a
+// date, so it is only good for an immediate download.
 func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, error) {
 	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
 		return provider.Stream{}, fmt.Errorf("tvp: invalid id %q", id)
@@ -252,7 +346,6 @@ func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, err
 	err := p.get(ctx, id+"/videos/playlist", url.Values{"videoType": {"MOVIE"}}, &pl)
 	var apiErr *apiError
 	if errors.As(err, &apiErr) && apiErr.permanent() {
-		// e.g. GEOIP_FILTER_FAILED, ITEM_NOT_PAID
 		return provider.Stream{}, fmt.Errorf("%w: tvp %s", provider.ErrUnavailable, apiErr.reason())
 	}
 	if err != nil {
@@ -275,8 +368,7 @@ type apiError struct {
 
 func (e *apiError) Error() string { return "tvp: " + e.reason() }
 
-// permanent reports whether retrying cannot help: client errors except a
-// timeout or rate limit.
+// permanent reports whether retrying cannot help.
 func (e *apiError) permanent() bool {
 	return e.status >= 400 && e.status < 500 &&
 		e.status != http.StatusRequestTimeout && e.status != http.StatusTooManyRequests

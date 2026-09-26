@@ -26,8 +26,7 @@ func TestNormalizeTitle(t *testing.T) {
 	}
 }
 
-// Sonarr/Radarr send either the raw title or a cleaned one (leading "The"
-// dropped, "&" → "and", apostrophes removed); both must match the catalogue.
+// Raw and *arr-cleaned titles must match.
 func TestNormalizeTitleMatchesArrCleaning(t *testing.T) {
 	pairs := [][2]string{
 		{"The Killing", "Killing"},
@@ -67,8 +66,7 @@ func TestRegistry(t *testing.T) {
 	NewRegistry(named("tvp"), named("tvp"))
 }
 
-// Newznab requests are served concurrently; NormalizeTitle must be safe for
-// concurrent use (run with -race).
+// Requests are served concurrently; run with -race.
 func TestNormalizeTitleConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

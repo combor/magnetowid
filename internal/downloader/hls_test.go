@@ -119,8 +119,7 @@ func TestPickInputs(t *testing.T) {
 		t.Errorf("redirected master: got %v, %v; want %v", got, err, want)
 	}
 
-	// Media playlists and non-HLS URLs are passed through; the latter
-	// without being fetched.
+	// Other URLs pass through; non-HLS ones aren't fetched.
 	for _, u := range []string{srv.URL + "/media.m3u8", srv.URL + "/video.mpd", srv.URL + "/film.mp4"} {
 		got, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: u})
 		if err != nil || len(got) != 1 || got[0] != u {

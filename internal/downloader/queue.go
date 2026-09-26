@@ -1,6 +1,4 @@
-// Package downloader runs download jobs one at a time: resolve the stream
-// with the job's provider, fetch it with an Engine, then move the result
-// into {dir}/{category}/{name}/ for Sonarr/Radarr to import.
+// Package downloader runs download jobs one at a time.
 package downloader
 
 import (
@@ -22,7 +20,7 @@ import (
 	"github.com/combor/vodarr/internal/provider"
 )
 
-// Status mirrors the SABnzbd job states Sonarr/Radarr understand.
+// Status is a SABnzbd job state.
 type Status string
 
 const (
@@ -32,8 +30,7 @@ const (
 	StatusFailed      Status = "Failed"
 )
 
-// Failed attempts are retried maxRetries times, waiting firstRetryDelay,
-// then 4x longer each time (5s, 20s, 80s, 320s, ...), capped at maxRetryDelay.
+// Retry waits grow 4x from firstRetryDelay: 5s, 20s, 80s, 320s, 10m.
 const (
 	maxRetries      = 5
 	firstRetryDelay = 5 * time.Second
@@ -49,11 +46,9 @@ func backoff(n int) time.Duration {
 	return min(d, maxRetryDelay)
 }
 
-// errUnknownProvider is permanent: retrying cannot help.
 var errUnknownProvider = errors.New("unknown provider")
 
-// Engine fetches a stream into out. progress reports how much media time has
-// been written and the bytes written so far.
+// Engine fetches a stream into out.
 type Engine interface {
 	Download(ctx context.Context, s provider.Stream, out string, progress func(done time.Duration, bytes int64)) error
 }
@@ -61,7 +56,7 @@ type Engine interface {
 // Job is a snapshot of one download.
 type Job struct {
 	ID       string
-	Name     string // folder and file name, from the uploaded NZB name
+	Name     string
 	NZBName  string
 	Category string
 	Ref      nzb.Ref
@@ -72,9 +67,9 @@ type Job struct {
 	Fraction float64 // 0..1
 	Bytes    int64   // written so far, or final size
 	Storage  string  // completed job folder
-	Error    string  // last failure, also kept while waiting to retry
+	Error    string
 	Attempts int
-	RetryAt  time.Time // queued job waits until then
+	RetryAt  time.Time
 }
 
 // Queue holds jobs in memory and runs them with a single worker.
@@ -84,11 +79,11 @@ type Queue struct {
 	engine    Engine
 	log       *slog.Logger
 
-	retryDelay func(n int) time.Duration // backoff; replaced in tests
+	retryDelay func(n int) time.Duration
 
 	mu      sync.Mutex
 	jobs    map[string]*Job
-	order   []string // insertion order
+	order   []string
 	cancels map[string]context.CancelFunc
 	wake    chan struct{}
 }
@@ -144,8 +139,8 @@ func (q *Queue) Jobs() []Job {
 	return out
 }
 
-// Delete removes a job, cancelling it if it is running. With deleteFiles, a
-// completed job's folder is removed too. It reports whether the job existed.
+// Delete removes a job, cancelling it if running, and with deleteFiles its
+// folder. It reports whether the job existed.
 func (q *Queue) Delete(id string, deleteFiles bool) bool {
 	q.mu.Lock()
 	job, ok := q.jobs[id]
@@ -161,10 +156,7 @@ func (q *Queue) Delete(id string, deleteFiles bool) bool {
 		}
 	}
 	cancel := q.cancels[id]
-	// Remove files before unlocking: once the record is gone its path is no
-	// longer reserved, and moveToComplete (which reads reservations under
-	// this lock) must not hand it to a new job while it is still being
-	// deleted.
+	// Under the lock, so moveToComplete can't reuse the path meanwhile.
 	if deleteFiles && job.Storage != "" {
 		if err := os.RemoveAll(job.Storage); err != nil {
 			q.log.Warn("removing job files", "id", id, "err", err)
@@ -179,8 +171,7 @@ func (q *Queue) Delete(id string, deleteFiles bool) bool {
 	return true
 }
 
-// Run processes queued jobs until ctx is cancelled. Jobs waiting to retry
-// don't block the others.
+// Run processes queued jobs until ctx is cancelled.
 func (q *Queue) Run(ctx context.Context) {
 	for {
 		id, wait, ok := q.next()
@@ -208,8 +199,8 @@ func (q *Queue) Run(ctx context.Context) {
 	}
 }
 
-// next marks the oldest ready job as downloading and returns its ID. If no
-// job is ready, it returns how long until the earliest retry (0 if none).
+// next starts the oldest ready job. If none is ready, wait is the time until
+// the earliest retry.
 func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -259,7 +250,7 @@ func (q *Queue) process(parent context.Context, id string) {
 	delete(q.cancels, id)
 	job, ok = q.jobs[id]
 	if !ok {
-		// Deleted while running; don't leave its output behind.
+		// Deleted while running.
 		if storage != "" {
 			os.RemoveAll(storage)
 		}
@@ -269,7 +260,6 @@ func (q *Queue) process(parent context.Context, id string) {
 	if err != nil {
 		job.Error = err.Error()
 		if retryable(parent, err) && job.Attempts <= maxRetries {
-			// Back to the queue; a retry resolves a fresh stream URL.
 			delay := q.retryDelay(job.Attempts)
 			job.Status = StatusQueued
 			job.RetryAt = job.Finished.Add(delay)
@@ -289,23 +279,20 @@ func (q *Queue) process(parent context.Context, id string) {
 	q.log.Info("job completed", "id", id, "name", job.Name, "storage", storage, "bytes", job.Bytes)
 }
 
-// retryable reports whether a failed attempt may succeed later: not when the
-// content is unavailable (DRM, geo-blocked, paid), the provider is unknown,
-// or vodarr is shutting down.
+// retryable reports whether a failed attempt is worth retrying.
 func retryable(parent context.Context, err error) bool {
 	return parent.Err() == nil &&
 		!errors.Is(err, provider.ErrUnavailable) &&
 		!errors.Is(err, errUnknownProvider)
 }
 
-// run makes one download attempt into work and moves the file to its final
-// folder, which it returns.
+// run makes one download attempt and returns the completed folder.
 func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string, error) {
 	p, ok := q.providers.Get(j.Ref.Provider)
 	if !ok {
 		return "", fmt.Errorf("%w %q", errUnknownProvider, j.Ref.Provider)
 	}
-	if err := os.MkdirAll(work, 0o755); err != nil {
+	if err := os.MkdirAll(work, 0o777); err != nil {
 		return "", err
 	}
 	out := filepath.Join(work, j.Name+".mp4")
@@ -323,7 +310,7 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 		}
 	}
 
-	// Resolve on every attempt: stream URLs expire and may point at a bad edge.
+	// Stream URLs expire, so resolve on every attempt.
 	s, err := p.Resolve(ctx, j.Ref.ID)
 	if err != nil {
 		return "", err
@@ -334,19 +321,16 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 	return q.moveToComplete(out, j.Category, j.Name)
 }
 
-// moveToComplete moves out to {dir}/{category}/{name}/{name}.mp4. If that
-// folder exists, or a job record still points at it (an importer may have
-// removed the folder but not the record), it tries name.1, name.2, ... like
-// SABnzbd, so jobs never share files or delete each other's.
+// moveToComplete moves out to {dir}/{category}/{name}/{name}.mp4, trying
+// name.1, name.2, ... if the folder exists or another job references it.
 func (q *Queue) moveToComplete(out, category, name string) (string, error) {
 	parent := q.dir
 	if c := SanitizeName(category); category != "" && category != "*" && c != "" {
 		parent = filepath.Join(q.dir, c)
 	}
-	if err := os.MkdirAll(parent, 0o755); err != nil {
+	if err := os.MkdirAll(parent, 0o777); err != nil {
 		return "", err
 	}
-	// Only the single worker creates folders, so this can't go stale.
 	reserved := map[string]bool{}
 	q.mu.Lock()
 	for _, j := range q.jobs {
@@ -364,7 +348,7 @@ func (q *Queue) moveToComplete(out, category, name string) (string, error) {
 		if reserved[dest] {
 			continue
 		}
-		err := os.Mkdir(dest, 0o755)
+		err := os.Mkdir(dest, 0o777)
 		if errors.Is(err, fs.ErrExist) {
 			continue
 		}

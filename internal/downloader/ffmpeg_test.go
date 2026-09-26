@@ -15,10 +15,8 @@ import (
 	"github.com/combor/vodarr/internal/provider"
 )
 
-// makeHLS writes a short HLS stream shaped like TVP's into dir using
-// ffmpeg's test sources: H.264 + AAC in fMP4 segments, two video variants
-// (stream_0 160x120, stream_1 80x60) and audio as a separate rendition
-// (stream_2).
+// makeHLS writes a TVP-like HLS stream into dir: fMP4 video variants
+// stream_0 (160x120) and stream_1 (80x60), audio rendition stream_2.
 func makeHLS(t *testing.T, dir string) {
 	t.Helper()
 	encoders, _ := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
@@ -106,20 +104,18 @@ func TestFFmpegReportsErrors(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out.mp4")
 	noop := func(time.Duration, int64) {}
 
-	// A missing HLS playlist fails while vodarr fetches it...
+	// A missing playlist fails in vodarr, anything else in ffmpeg.
 	err := (&FFmpeg{}).Download(context.Background(), provider.Stream{URL: srv.URL + "/missing.m3u8"}, out, noop)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Errorf("missing playlist: err = %v", err)
 	}
-	// ...anything else fails inside ffmpeg.
 	err = (&FFmpeg{}).Download(context.Background(), provider.Stream{URL: srv.URL + "/missing.mp4"}, out, noop)
 	if err == nil || !strings.Contains(err.Error(), "ffmpeg") {
 		t.Errorf("missing file: err = %v", err)
 	}
 }
 
-// segmentPath returns the URL path of the n-th (0-based) media segment listed
-// in the playlist file at dir/name.
+// segmentPath returns the URL path of the n-th segment in playlist dir/name.
 func segmentPath(t *testing.T, dir, name string, n int) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(dir, name))
@@ -138,7 +134,7 @@ func segmentPath(t *testing.T, dir, name string, n int) string {
 	return "/" + segs[n]
 }
 
-// ffmpeg skips a segment it cannot fetch and still exits 0; that must fail.
+// ffmpeg skips a missing segment and still exits 0.
 func TestFFmpegFailsOnMissingSegment(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
@@ -188,8 +184,7 @@ func TestFFmpegStallTimeout(t *testing.T) {
 	}
 }
 
-// A damaged MPEG-TS segment (missing transport packets) makes ffmpeg log
-// "Packet corrupt" yet exit 0; that must fail.
+// ffmpeg logs "Packet corrupt" for a damaged TS segment and still exits 0.
 func TestFFmpegFailsOnCorruptTSSegment(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
@@ -213,7 +208,7 @@ func TestFFmpegFailsOnCorruptTSSegment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const ts = 188 // transport packet size
+	const ts = 188 // TS packet size
 	if len(b) < 40*ts {
 		t.Fatalf("segment too small: %d bytes", len(b))
 	}
