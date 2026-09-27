@@ -48,12 +48,14 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	return provider.Stream{URL: fmt.Sprintf("http://example.invalid/%s/%d.m3u8", id, f.resolves)}, nil
 }
 
-// fakeEngine fails the first fail calls and any stream URL containing failURL.
+// fakeEngine fails the first fail calls and any stream URL containing failURL,
+// with err or else "boom".
 type fakeEngine struct {
 	mu      sync.Mutex
 	calls   int
 	fail    int
 	failURL string
+	err     error
 }
 
 func (e *fakeEngine) Download(_ context.Context, s provider.Stream, out string, progress func(time.Duration, int64)) error {
@@ -61,6 +63,9 @@ func (e *fakeEngine) Download(_ context.Context, s provider.Stream, out string, 
 	e.calls++
 	failing := e.calls <= e.fail || (e.failURL != "" && strings.Contains(s.URL, e.failURL))
 	e.mu.Unlock()
+	if failing && e.err != nil {
+		return e.err
+	}
 	if failing {
 		return errors.New("boom")
 	}
@@ -269,6 +274,23 @@ func TestOutagePausesProvider(t *testing.T) {
 	defer p.mu.Unlock()
 	if p.resolves != 1 {
 		t.Errorf("resolves = %d, want 1", p.resolves)
+	}
+}
+
+// A stream host that can't be reached is that job's problem: it uses a retry
+// and doesn't hold up the provider's other jobs.
+func TestUnreachableStreamIsNotAnOutage(t *testing.T) {
+	dial := &url.Error{Op: "Get", URL: "http://cdn.invalid/", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}}
+	e := &fakeEngine{failURL: "/bad/", err: fmt.Errorf("fetching playlist: %w", dial)}
+	q := startQueueWithDelay(t, &fakeProvider{}, e, time.Hour)
+	bad := q.Add("bad", "bad.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "bad"})
+	good := waitFinished(t, q, q.Add("good", "good.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "good"}))
+	if good.Status != StatusCompleted {
+		t.Fatalf("good job: %s %q", good.Status, good.Error)
+	}
+	j := waitJob(t, q, bad, func(j Job) bool { return j.Error != "" })
+	if j.Status != StatusQueued || j.Attempts != 1 || time.Until(j.RetryAt) < 50*time.Minute {
+		t.Fatalf("bad job = %+v", j)
 	}
 }
 

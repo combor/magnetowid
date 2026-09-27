@@ -49,7 +49,12 @@ func backoff(n int) time.Duration {
 	return min(d, maxRetryDelay)
 }
 
-var errUnknownProvider = errors.New("unknown provider")
+var (
+	errUnknownProvider = errors.New("unknown provider")
+	// errUnreachable marks a failure to reach the provider at all, as opposed
+	// to one item's stream.
+	errUnreachable = errors.New("provider unreachable")
+)
 
 // Engine fetches a stream into out.
 type Engine interface {
@@ -322,7 +327,7 @@ func (q *Queue) process(parent context.Context, id string) {
 		q.log.Info("job interrupted, requeued", "id", id, "name", job.Name)
 		return
 	}
-	if err != nil && offline(err) {
+	if errors.Is(err, errUnreachable) {
 		// The provider is unreachable, so every job for it would fail the
 		// same way. Pause them all rather than use up this job's retries.
 		requeue(job)
@@ -335,7 +340,7 @@ func (q *Queue) process(parent context.Context, id string) {
 		o.n++
 		delay := q.retryDelay(o.n)
 		o.until = time.Now().Add(delay)
-		q.log.Warn("provider unreachable, pausing its jobs", "provider", job.Ref.Provider,
+		q.log.Warn("pausing provider's jobs", "provider", job.Ref.Provider,
 			"retry_in", delay, "err", err)
 		return
 	}
@@ -431,6 +436,9 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 
 	// Stream URLs expire, so resolve on every attempt.
 	s, err := p.Resolve(ctx, j.Ref.ID)
+	if err != nil && offline(err) {
+		return "", fmt.Errorf("%w: %w", errUnreachable, err)
+	}
 	if err != nil {
 		return "", err
 	}
