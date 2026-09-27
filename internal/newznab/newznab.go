@@ -31,11 +31,9 @@ const maxResults = 100
 // probeWorkers bounds the streams one search probes at once.
 const probeWorkers = 4
 
-// Sonarr and Radarr give up on a request after 100 s. So probing stops after
-// probeBudget, and in any case answerWithin after the request came, leaving
-// out the streams not read by then rather than lose the whole result. A
-// stalled stream fails sooner, after the prober's 20 s, which leaves time to
-// probe another in its place.
+// Sonarr and Radarr give up on a request after 100 s, so probing stops after
+// probeBudget or answerWithin after the request came, whichever is first.
+// Streams not read by then are left out.
 const (
 	probeBudget  = 45 * time.Second
 	answerWithin = 90 * time.Second
@@ -137,7 +135,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	off, lim := pageBounds(q.Get("offset"), q.Get("limit"))
 	want := off + lim
 	if off < 0 || off >= len(found) {
-		want = 0 // the page is empty whatever is left out
+		want = 0
 	}
 	deadline := time.Now().Add(cmp.Or(h.probeBudget, probeBudget))
 	if answerBy := start.Add(cmp.Or(h.answerWithin, answerWithin)); answerBy.Before(deadline) {
@@ -168,10 +166,9 @@ type probed struct {
 	info probe.Info
 }
 
-// probeUntil returns, in order, the first want items whose quality could be
-// read, probing no further. It leaves out and counts the ones that can't be
-// downloaded (DRM, paid, region-blocked) and the ones whose quality can't be
-// read, rather than offer a release under a quality it may not have.
+// probeUntil probes items in order until want of them have a readable
+// quality, and returns those. Items that can't be downloaded (DRM, paid,
+// region-blocked) or whose quality can't be read are left out and counted.
 func (h *Handler) probeUntil(ctx context.Context, p provider.Provider, items []provider.Item, want int) (out []probed, unavailable, unreadable int) {
 	var firstUnavailable error
 	for next := 0; next < len(items) && len(out) < want && ctx.Err() == nil; {

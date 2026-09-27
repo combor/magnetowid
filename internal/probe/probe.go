@@ -189,8 +189,8 @@ func (pr *Prober) store(key string, c cached, now time.Time) cached {
 	return c
 }
 
-// probe reads the item's quality. Running out of pr.Timeout is a failure of
-// the item's, unlike the caller's ctx ending.
+// probe reads the item's quality within pr.Timeout. Running out of it is the
+// stream's failure, which Probe caches; the caller's ctx ending isn't.
 func (pr *Prober) probe(ctx context.Context, p provider.Provider, id string) (Info, error) {
 	client := pr.Client
 	if client == nil {
