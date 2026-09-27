@@ -400,6 +400,39 @@ func TestDatabaseInUse(t *testing.T) {
 	}
 }
 
+// Only finished jobs past the retention are forgotten, also on disk.
+func TestPruneOldHistory(t *testing.T) {
+	dir := t.TempDir()
+	q := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	now := time.Now()
+	old := now.Add(-historyRetention - time.Hour)
+	set := func(name string, status Status, finished time.Time) string {
+		id := q.Add(name, name+".nzb", "tv", nzb.Ref{Provider: "fake", ID: name})
+		q.mu.Lock()
+		defer q.mu.Unlock()
+		q.jobs[id].Status, q.jobs[id].Finished = status, finished
+		q.put(q.jobs[id])
+		return id
+	}
+	set("old-completed", StatusCompleted, old)
+	set("old-failed", StatusFailed, old)
+	recent := set("recent", StatusCompleted, now.Add(-time.Hour))
+	retrying := set("retrying", StatusQueued, old) // a failed attempt sets Finished
+	q.mu.Lock()
+	q.prune(now)
+	q.mu.Unlock()
+	q.Close()
+
+	q = newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	var ids []string
+	for _, j := range q.Jobs() {
+		ids = append(ids, j.ID)
+	}
+	if len(ids) != 2 || ids[0] != recent || ids[1] != retrying {
+		t.Fatalf("kept %v, want [%s %s]", ids, recent, retrying)
+	}
+}
+
 func TestUnknownProviderFails(t *testing.T) {
 	q := startQueue(t, &fakeProvider{}, &fakeEngine{})
 	j := waitFinished(t, q, q.Add("d", "d.nzb", "tv", nzb.Ref{Provider: "gone", ID: "1"}))

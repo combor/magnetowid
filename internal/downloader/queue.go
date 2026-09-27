@@ -75,6 +75,10 @@ type Job struct {
 	RetryAt  time.Time `json:"retry_at,omitzero"`
 }
 
+// historyRetention is how long finished jobs are kept. Sonarr/Radarr handle
+// them within minutes and usually remove them themselves.
+const historyRetention = 30 * 24 * time.Hour
+
 // incompleteDir, under the download root, holds one work folder per running job.
 const incompleteDir = ".incomplete"
 
@@ -130,6 +134,7 @@ func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logg
 		q.jobs[j.ID] = j
 		q.order = append(q.order, j.ID)
 	}
+	q.prune(time.Now())
 	return q, nil
 }
 
@@ -296,7 +301,10 @@ func (q *Queue) process(parent context.Context, id string) {
 	}
 	// Every outcome below is saved; progress while running is not, so a
 	// crash leaves the job Queued with its earlier attempts.
-	defer q.put(job)
+	defer func() {
+		q.put(job)
+		q.prune(time.Now())
+	}()
 	if err != nil && parent.Err() != nil {
 		// Interrupted by shutdown, which is not the job's fault.
 		requeue(job)
@@ -342,6 +350,27 @@ func (q *Queue) process(parent context.Context, id string) {
 	job.Fraction = 1
 	job.Storage = storage
 	q.log.Info("job completed", "id", id, "name", job.Name, "storage", storage, "bytes", job.Bytes)
+}
+
+// prune forgets finished jobs older than historyRetention but leaves their
+// files, which belong to Sonarr/Radarr. q.mu must be held.
+func (q *Queue) prune(now time.Time) {
+	var old []string
+	kept := q.order[:0]
+	for _, id := range q.order {
+		j := q.jobs[id]
+		if (j.Status == StatusCompleted || j.Status == StatusFailed) && now.Sub(j.Finished) > historyRetention {
+			old = append(old, id)
+			delete(q.jobs, id)
+			continue
+		}
+		kept = append(kept, id)
+	}
+	q.order = kept
+	if len(old) > 0 {
+		q.remove(old...)
+		q.log.Info("forgot old finished jobs", "count", len(old))
+	}
 }
 
 // requeue returns a started job to the queue without counting the attempt.

@@ -64,7 +64,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.delete(w, r)
 			return
 		}
-		writeJSON(w, map[string]any{"history": h.history(r.FormValue("category"))})
+		start, _ := strconv.Atoi(r.FormValue("start"))
+		limit, _ := strconv.Atoi(r.FormValue("limit"))
+		writeJSON(w, map[string]any{"history": h.history(r.FormValue("category"), start, limit)})
 	default:
 		writeJSON(w, errorResponse(fmt.Sprintf("mode %q not supported", mode)))
 	}
@@ -204,8 +206,9 @@ type historySlot struct {
 	FailMessage  string `json:"fail_message"`
 }
 
-// history lists finished jobs, newest first like SABnzbd.
-func (h *Handler) history(cat string) map[string]any {
+// history lists finished jobs, newest first like SABnzbd. It returns up to
+// limit (0 = all) of them after skipping start, and the total count.
+func (h *Handler) history(cat string, start, limit int) map[string]any {
 	jobs := h.Queue.Jobs()
 	slots := []historySlot{}
 	for i := len(jobs) - 1; i >= 0; i-- {
@@ -226,7 +229,12 @@ func (h *Handler) history(cat string) map[string]any {
 			FailMessage:  j.Error,
 		})
 	}
-	return map[string]any{"noofslots": len(slots), "slots": slots}
+	total := len(slots)
+	slots = slots[min(max(start, 0), total):]
+	if limit > 0 && len(slots) > limit {
+		slots = slots[:limit]
+	}
+	return map[string]any{"noofslots": total, "slots": slots}
 }
 
 // estimatedSize extrapolates from progress, or guesses from the duration.

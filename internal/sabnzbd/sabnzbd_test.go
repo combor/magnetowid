@@ -219,6 +219,34 @@ func TestHistoryAndDelete(t *testing.T) {
 	}
 }
 
+// Sonarr/Radarr page history with start and limit.
+func TestHistoryPaging(t *testing.T) {
+	srv, _ := newServer(t, true)
+	for _, name := range []string{"A.nzb", "B.nzb", "C.nzb"} {
+		addFile(t, srv, name, vodarrNZB(t))
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h := call(t, srv, url.Values{"mode": {"history"}})["history"].(map[string]any)
+		if h["noofslots"] == float64(3) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("history = %v", h)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h := call(t, srv, url.Values{"mode": {"history"}, "start": {"1"}, "limit": {"1"}})["history"].(map[string]any)
+	slots := h["slots"].([]any)
+	if h["noofslots"] != float64(3) || len(slots) != 1 || slots[0].(map[string]any)["name"] != "B" {
+		t.Fatalf("history = %v", h)
+	}
+	h = call(t, srv, url.Values{"mode": {"history"}, "start": {"5"}})["history"].(map[string]any)
+	if h["noofslots"] != float64(3) || len(h["slots"].([]any)) != 0 {
+		t.Fatalf("past the end: %v", h)
+	}
+}
+
 // The key is checked before any upload is read, and uploads are capped.
 func TestUploadLimits(t *testing.T) {
 	srv, q := newServer(t, false)
