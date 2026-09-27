@@ -191,7 +191,9 @@ Everything else is shared.
 
 `make test` runs formatting checks, vet, and race tests. Install ffmpeg with the
 libx264 encoder to run the download-engine tests. `make docker-smoke` builds the
-container and checks startup and both APIs.
+container and checks startup and both APIs. `make package-smoke` builds the
+Linux packages with GoReleaser and checks that each installs, runs and uninstalls
+as a systemd service in Debian, Fedora and Arch containers.
 
 ## License
 
