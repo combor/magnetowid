@@ -174,6 +174,10 @@ func (q *Queue) Delete(id string, deleteFiles bool) bool {
 // Run processes queued jobs until ctx is cancelled.
 func (q *Queue) Run(ctx context.Context) {
 	for {
+		// Checked first, so a cancelled queue doesn't start the next job.
+		if ctx.Err() != nil {
+			return
+		}
 		id, wait, ok := q.next()
 		if ok {
 			q.process(ctx, id)
@@ -192,9 +196,6 @@ func (q *Queue) Run(ctx context.Context) {
 		}
 		if timer != nil {
 			timer.Stop()
-		}
-		if ctx.Err() != nil {
-			return
 		}
 	}
 }
@@ -256,10 +257,16 @@ func (q *Queue) process(parent context.Context, id string) {
 		}
 		return
 	}
+	if err != nil && parent.Err() != nil {
+		// Interrupted by shutdown, which is not the job's fault.
+		requeue(job)
+		q.log.Info("job interrupted, requeued", "id", id, "name", job.Name)
+		return
+	}
 	job.Finished = time.Now()
 	if err != nil {
 		job.Error = err.Error()
-		if retryable(parent, err) && job.Attempts <= maxRetries {
+		if retryable(err) && job.Attempts <= maxRetries {
 			delay := q.retryDelay(job.Attempts)
 			job.Status = StatusQueued
 			job.RetryAt = job.Finished.Add(delay)
@@ -279,10 +286,16 @@ func (q *Queue) process(parent context.Context, id string) {
 	q.log.Info("job completed", "id", id, "name", job.Name, "storage", storage, "bytes", job.Bytes)
 }
 
+// requeue returns a started job to the queue without counting the attempt.
+func requeue(job *Job) {
+	job.Status = StatusQueued
+	job.Attempts--
+	job.Fraction, job.Bytes = 0, 0
+}
+
 // retryable reports whether a failed attempt is worth retrying.
-func retryable(parent context.Context, err error) bool {
-	return parent.Err() == nil &&
-		!errors.Is(err, provider.ErrUnavailable) &&
+func retryable(err error) bool {
+	return !errors.Is(err, provider.ErrUnavailable) &&
 		!errors.Is(err, errUnknownProvider)
 }
 

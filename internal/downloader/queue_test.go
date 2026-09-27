@@ -64,15 +64,34 @@ func startQueue(t *testing.T, p *fakeProvider, e Engine) *Queue {
 	return startQueueWithDelay(t, p, e, 10*time.Millisecond)
 }
 
+// blockingEngine reports each download on started and holds it until cancelled.
+type blockingEngine struct {
+	started chan string
+}
+
+func (e *blockingEngine) Download(ctx context.Context, s provider.Stream, _ string, _ func(time.Duration, int64)) error {
+	e.started <- s.URL
+	<-ctx.Done()
+	return ctx.Err()
+}
+
 func startQueueWithDelay(t *testing.T, p *fakeProvider, e Engine, retryDelay time.Duration) *Queue {
 	t.Helper()
 	q := New(t.TempDir(), provider.NewRegistry(p), e, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	q.retryDelay = func(int) time.Duration { return retryDelay }
+	run(t, q)
+	return q
+}
+
+// run starts q's worker and returns a function that stops it and waits.
+func run(t *testing.T, q *Queue) (stop func()) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() { q.Run(ctx); close(done) }()
-	t.Cleanup(func() { cancel(); <-done })
-	return q
+	stop = func() { cancel(); <-done }
+	t.Cleanup(stop)
+	return stop
 }
 
 func waitFinished(t *testing.T, q *Queue, id string) Job {
@@ -182,6 +201,26 @@ func TestUnavailableIsNotRetried(t *testing.T) {
 	j := waitFinished(t, q, q.Add("c", "c.nzb", "tv", nzb.Ref{Provider: "fake", ID: "1"}))
 	if j.Status != StatusFailed || p.resolves != 1 || j.Error != "content unavailable: DRM" {
 		t.Fatalf("status = %s, resolves = %d, error = %q", j.Status, p.resolves, j.Error)
+	}
+}
+
+// Shutdown puts the running job back and starts nothing else.
+func TestShutdownRequeues(t *testing.T) {
+	p := &fakeProvider{}
+	e := &blockingEngine{started: make(chan string, 1)}
+	q := New(t.TempDir(), provider.NewRegistry(p), e, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	stop := run(t, q)
+	q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.started
+	q.Add("b", "b.nzb", "tv", nzb.Ref{Provider: "fake", ID: "b"})
+	stop()
+	for _, j := range q.Jobs() {
+		if j.Status != StatusQueued || j.Attempts != 0 {
+			t.Errorf("job %s: status = %s, attempts = %d", j.Name, j.Status, j.Attempts)
+		}
+	}
+	if p.resolves != 1 {
+		t.Errorf("resolves = %d, want 1", p.resolves)
 	}
 }
 
