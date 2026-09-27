@@ -125,6 +125,7 @@ manage downloads in Sonarr/Radarr.
 | The container cannot find or write to the download folder | Create `VODARR_DOWNLOAD_PATH` before starting and check that `VODARR_UID` and `VODARR_GID` have write access. |
 | Downloads finish but are not imported | Mount the shared folder into Sonarr/Radarr, check file permissions and add a Remote Path Mapping if the paths differ. |
 | A vodarr release is sent to another download client | Set the indexer's **Download Client** to `vodarr`. |
+| Downloads stay queued and the log says `provider unreachable` | vodarr can't reach the site, for example because the network, DNS or VPN is down. Jobs wait and resume on their own once the site is reachable; they don't fail. |
 
 To inspect recent container messages:
 

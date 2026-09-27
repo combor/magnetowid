@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,9 +19,12 @@ import (
 	"github.com/combor/vodarr/internal/provider"
 )
 
+// fakeProvider can't be reached for the first offline resolves, then returns
+// err if set.
 type fakeProvider struct {
 	mu       sync.Mutex
 	resolves int
+	offline  int
 	err      error
 }
 
@@ -33,6 +38,10 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resolves++
+	if f.resolves <= f.offline {
+		return provider.Stream{}, &url.Error{Op: "Get", URL: "http://example.invalid/", Err: &net.OpError{
+			Op: "dial", Net: "tcp", Err: errors.New("connect: connection refused")}}
+	}
 	if f.err != nil {
 		return provider.Stream{}, f.err
 	}
@@ -96,16 +105,22 @@ func run(t *testing.T, q *Queue) (stop func()) {
 
 func waitFinished(t *testing.T, q *Queue, id string) Job {
 	t.Helper()
+	return waitJob(t, q, id, func(j Job) bool { return j.Status == StatusCompleted || j.Status == StatusFailed })
+}
+
+// waitJob polls until job id satisfies cond.
+func waitJob(t *testing.T, q *Queue, id string, cond func(Job) bool) Job {
+	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, j := range q.Jobs() {
-			if j.ID == id && (j.Status == StatusCompleted || j.Status == StatusFailed) {
+			if j.ID == id && cond(j) {
 				return j
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("job %s did not finish", id)
+	t.Fatalf("job %s: condition not met", id)
 	return Job{}
 }
 
@@ -194,6 +209,61 @@ func TestRetryWaitDoesNotBlockQueue(t *testing.T) {
 		}
 	}
 }
+
+// An outage longer than the retry budget doesn't fail the job.
+func TestOutageUsesNoRetries(t *testing.T) {
+	p := &fakeProvider{offline: maxRetries + 3}
+	q := startQueue(t, p, &fakeEngine{})
+	j := waitFinished(t, q, q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "1"}))
+	if j.Status != StatusCompleted || j.Attempts != 1 || p.resolves != maxRetries+4 || j.Error != "" {
+		t.Fatalf("status = %s, attempts = %d, resolves = %d, error = %q", j.Status, j.Attempts, p.resolves, j.Error)
+	}
+}
+
+// While a provider is unreachable, none of its jobs are tried.
+func TestOutagePausesProvider(t *testing.T) {
+	p := &fakeProvider{offline: 1}
+	q := startQueueWithDelay(t, p, &fakeEngine{}, time.Hour)
+	a := q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
+	b := q.Add("b", "b.nzb", "tv", nzb.Ref{Provider: "fake", ID: "b"})
+	waitJob(t, q, a, func(j Job) bool { return j.Error != "" })
+	time.Sleep(50 * time.Millisecond)
+	for _, j := range q.Jobs() {
+		if (j.ID == a || j.ID == b) && (j.Status != StatusQueued || j.Attempts != 0) {
+			t.Errorf("job %s: status = %s, attempts = %d", j.Name, j.Status, j.Attempts)
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.resolves != 1 {
+		t.Errorf("resolves = %d, want 1", p.resolves)
+	}
+}
+
+func TestOffline(t *testing.T) {
+	dial := &url.Error{Op: "Get", URL: "http://x/", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}}
+	tests := []struct {
+		err  error
+		want bool
+	}{
+		{fmt.Errorf("tvp: %w", dial), true},
+		{fmt.Errorf("fetching playlist: %w", &url.Error{Op: "Get", URL: "http://x/", Err: timeoutError{}}), true},
+		{&url.Error{Op: "parse", URL: "::", Err: errors.New("missing protocol scheme")}, false},
+		{errors.New("ffmpeg: exit status 1"), false},
+		{fmt.Errorf("%w: DRM", provider.ErrUnavailable), false},
+	}
+	for _, tt := range tests {
+		if got := offline(tt.err); got != tt.want {
+			t.Errorf("offline(%v) = %v, want %v", tt.err, got, tt.want)
+		}
+	}
+}
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "Client.Timeout exceeded" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
 
 func TestUnavailableIsNotRetried(t *testing.T) {
 	p := &fakeProvider{err: fmt.Errorf("%w: DRM", provider.ErrUnavailable)}

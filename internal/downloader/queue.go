@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -85,7 +86,14 @@ type Queue struct {
 	jobs    map[string]*Job
 	order   []string
 	cancels map[string]context.CancelFunc
+	outages map[string]*outage // by provider name
 	wake    chan struct{}
+}
+
+// outage pauses a provider's jobs after it couldn't be reached n times in a row.
+type outage struct {
+	n     int
+	until time.Time
 }
 
 // New returns a queue that downloads into dir, which must be absolute.
@@ -98,6 +106,7 @@ func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logg
 		retryDelay: backoff,
 		jobs:       make(map[string]*Job),
 		cancels:    make(map[string]context.CancelFunc),
+		outages:    make(map[string]*outage),
 		wake:       make(chan struct{}, 1),
 	}
 }
@@ -201,7 +210,7 @@ func (q *Queue) Run(ctx context.Context) {
 }
 
 // next starts the oldest ready job. If none is ready, wait is the time until
-// the earliest retry.
+// the earliest retry or end of a provider pause.
 func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -211,9 +220,13 @@ func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 		if job.Status != StatusQueued {
 			continue
 		}
-		if until := job.RetryAt.Sub(now); until > 0 {
-			if wait == 0 || until < wait {
-				wait = until
+		until := job.RetryAt
+		if o := q.outages[job.Ref.Provider]; o != nil && o.until.After(until) {
+			until = o.until
+		}
+		if d := until.Sub(now); d > 0 {
+			if wait == 0 || d < wait {
+				wait = d
 			}
 			continue
 		}
@@ -263,6 +276,24 @@ func (q *Queue) process(parent context.Context, id string) {
 		q.log.Info("job interrupted, requeued", "id", id, "name", job.Name)
 		return
 	}
+	if err != nil && offline(err) {
+		// The provider is unreachable, so every job for it would fail the
+		// same way. Pause them all rather than use up this job's retries.
+		requeue(job)
+		job.Error = err.Error()
+		o := q.outages[job.Ref.Provider]
+		if o == nil {
+			o = &outage{}
+			q.outages[job.Ref.Provider] = o
+		}
+		o.n++
+		delay := q.retryDelay(o.n)
+		o.until = time.Now().Add(delay)
+		q.log.Warn("provider unreachable, pausing its jobs", "provider", job.Ref.Provider,
+			"retry_in", delay, "err", err)
+		return
+	}
+	delete(q.outages, job.Ref.Provider)
 	job.Finished = time.Now()
 	if err != nil {
 		job.Error = err.Error()
@@ -291,6 +322,14 @@ func requeue(job *Job) {
 	job.Status = StatusQueued
 	job.Attempts--
 	job.Fraction, job.Bytes = 0, 0
+}
+
+// offline reports whether err is a network failure (DNS, connection or
+// timeout) rather than a problem with the item.
+func offline(err error) bool {
+	var op *net.OpError
+	var ne net.Error
+	return errors.As(err, &op) || (errors.As(err, &ne) && ne.Timeout())
 }
 
 // retryable reports whether a failed attempt is worth retrying.
