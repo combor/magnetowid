@@ -2,6 +2,7 @@
 package newznab
 
 import (
+	"context"
 	"encoding/xml"
 	"fmt"
 	"log/slog"
@@ -51,7 +52,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	switch t {
 	case "caps":
-		writeXML(w, caps(p.Name()))
+		_, byTVDB := p.(provider.TVDBSearcher)
+		writeXML(w, caps(p.Name(), byTVDB))
 	case "search", "tvsearch", "movie":
 		h.search(w, r, p, t)
 	case "get":
@@ -65,9 +67,11 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	q := r.URL.Query()
 	movie := t == "movie" || (t == "search" && hasMovieCategory(q.Get("cat")))
 	text := strings.TrimSpace(q.Get("q"))
-	if text == "" {
+	tvdbID, _ := strconv.Atoi(q.Get("tvdbid"))
+	if text == "" && (movie || tvdbID <= 0) {
 		// RSS sync and the indexer test, which fails on an empty feed. An
-		// unparseable placeholder can never be grabbed.
+		// unparseable placeholder can never be grabbed. A search by TVDB ID
+		// never gets it: Sonarr would skip its title search.
 		writeXML(w, h.feed(p, []item{h.placeholder(r, p, movie)}))
 		return
 	}
@@ -92,13 +96,19 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 		query = provider.Query{Kind: provider.Episode, Title: text, Season: season, Episode: episode}
 	}
 
-	found, err := p.Search(r.Context(), query)
+	var found []provider.Item
+	var err error
+	if query.Title == "" {
+		query.Title, found, err = searchTVDB(r.Context(), p, tvdbID, query)
+	} else {
+		found, err = p.Search(r.Context(), query)
+	}
 	if err != nil {
-		h.Log.Error("search failed", "provider", p.Name(), "kind", query.Kind, "title", query.Title, "err", err)
+		h.Log.Error("search failed", "provider", p.Name(), "kind", query.Kind, "title", query.Title, "tvdbid", tvdbID, "err", err)
 		writeError(w, 900, "Search failed: "+err.Error())
 		return
 	}
-	h.Log.Info("search", "provider", p.Name(), "kind", query.Kind, "title", query.Title,
+	h.Log.Info("search", "provider", p.Name(), "kind", query.Kind, "title", query.Title, "tvdbid", tvdbID,
 		"year", query.Year, "season", query.Season, "episode", query.Episode, "results", len(found))
 
 	// Sonarr/Radarr ask for the next offset whenever a page is full.
@@ -108,6 +118,21 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 		items = append(items, h.release(r, p, query, it))
 	}
 	writeXML(w, h.feed(p, items))
+}
+
+// searchTVDB serves Sonarr's search by TVDB ID alone. It finds nothing if
+// the provider can't search by TVDB ID or returns no title to name releases
+// with; Sonarr then searches by title.
+func searchTVDB(ctx context.Context, p provider.Provider, tvdbID int, q provider.Query) (string, []provider.Item, error) {
+	ts, ok := p.(provider.TVDBSearcher)
+	if !ok {
+		return "", nil, nil
+	}
+	title, found, err := ts.SearchTVDB(ctx, tvdbID, q)
+	if err != nil || title == "" {
+		return "", nil, err
+	}
+	return title, found, nil
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request, p provider.Provider) {
@@ -302,13 +327,19 @@ type capsCat struct {
 	Subcats []capsCat `xml:"subcat"`
 }
 
-func caps(providerName string) capsDoc {
+// caps advertises tvdbid for providers that can search by it. Sonarr then
+// searches by ID first, and by title only if that finds nothing.
+func caps(providerName string, tvdbSearch bool) capsDoc {
+	tvParams := "q,season,ep"
+	if tvdbSearch {
+		tvParams += ",tvdbid"
+	}
 	return capsDoc{
 		Server: capsServer{Title: "vodarr " + providerName},
 		Limits: capsLimits{Max: maxResults, Default: maxResults},
 		Searching: capsSearching{
 			Search:      capsSearch{Available: "yes", SupportedParams: "q", SearchEngine: "raw"},
-			TVSearch:    capsSearch{Available: "yes", SupportedParams: "q,season,ep", SearchEngine: "raw"},
+			TVSearch:    capsSearch{Available: "yes", SupportedParams: tvParams, SearchEngine: "raw"},
 			MovieSearch: capsSearch{Available: "yes", SupportedParams: "q", SearchEngine: "raw"},
 		},
 		Categories: []capsCat{

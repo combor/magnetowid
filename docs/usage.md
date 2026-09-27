@@ -6,7 +6,7 @@ vodarr needs no changes to either app: it looks like two things they already sup
 - **A Newznab indexer per site** at `/{provider}/api`, so they can search the site's catalogue.
 - **A SABnzbd download client** at `/api`, so they can send downloads, follow progress and import the finished MP4.
 
-Supported sites: **TVP VOD** (`tvp`).
+Supported sites: **TVP VOD** (`tvp`). See the [TVP VOD notes](../internal/provider/tvp/README.md).
 
 > Proof of concept: minimal features.
 
@@ -171,7 +171,9 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 
 - **Titles:** vodarr searches the site with the title Sonarr/Radarr send.
   - Radarr also searches with a film's original title, so non-English films are found.
-  - Sonarr only sends its own series title, which is often English. A series is found only if that title matches the site's, e.g. *Ranczo* but not *Rojst* (Sonarr: "The Mire").
+  - Sonarr only sends its own series title, which is often English. A series is
+    found only if that title matches the site's, unless the site can also be
+    searched by TVDB ID. The notes for each site say whether it can.
 - **What can't be downloaded:** DRM-protected and paid content, and titles not available where vodarr runs. These jobs fail with the site's reason. Getting network access to region-restricted titles is up to the operator.
 - **Release details:**
   - Releases are always named `1080p`; ffmpeg downloads the best quality available.
@@ -183,7 +185,10 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 Implement `provider.Provider` (`internal/provider/provider.go`) in a new package under `internal/provider/` and add it to the registry in `cmd/vodarr/main.go`. The provider:
 
 - searches its catalogue and maps Sonarr/Radarr numbering onto its own;
-- resolves an ID to a stream URL ffmpeg can open, at download time.
+- resolves an ID to a stream URL ffmpeg can open, at download time;
+- optionally implements `provider.TVDBSearcher` to find series by TVDB ID, if
+  Sonarr's titles don't match the site's;
+- documents the site's own behaviour and limits in a `README.md` in its package.
 
 Everything else is shared.
 

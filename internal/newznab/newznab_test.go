@@ -3,6 +3,7 @@ package newznab
 import (
 	"context"
 	"encoding/xml"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -31,6 +32,19 @@ func (f *fakeProvider) Search(_ context.Context, q provider.Query) ([]provider.I
 
 func (f *fakeProvider) Resolve(context.Context, string) (provider.Stream, error) {
 	return provider.Stream{}, nil
+}
+
+// fakeTVDBProvider also searches by TVDB ID, returning title and its items.
+type fakeTVDBProvider struct {
+	fakeProvider
+	gotTVDB int
+	title   string
+	err     error
+}
+
+func (f *fakeTVDBProvider) SearchTVDB(_ context.Context, tvdbID int, q provider.Query) (string, []provider.Item, error) {
+	f.gotTVDB, f.got = tvdbID, q
+	return f.title, f.items, f.err
 }
 
 func newServer(t *testing.T, p provider.Provider) *httptest.Server {
@@ -106,6 +120,11 @@ func TestCaps(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("caps missing %s\n%s", want, body)
 		}
+	}
+
+	body = get(t, newServer(t, &fakeTVDBProvider{}), "/fake/api", url.Values{"t": {"caps"}})
+	if want := `<tv-search available="yes" supportedParams="q,season,ep,tvdbid" searchEngine="raw">`; !strings.Contains(body, want) {
+		t.Errorf("caps missing %s\n%s", want, body)
 	}
 }
 
@@ -322,5 +341,51 @@ func TestLinksBehindProxy(t *testing.T) {
 	items := parseFeed(t, string(body))
 	if len(items) != 1 || !strings.HasPrefix(items[0].Link, "https://vodarr.example.com/fake/api?") {
 		t.Fatalf("items = %+v", items)
+	}
+}
+
+// Sonarr's first search for a series has only its TVDB ID. Releases are
+// named with the title the provider returns.
+func TestSearchByTVDBID(t *testing.T) {
+	fp := &fakeTVDBProvider{title: "Days of Honor"}
+	fp.items = []provider.Item{{ID: "1", Kind: provider.Episode, Season: 1, Episode: 2}}
+	srv := newServer(t, fp)
+	items := parseFeed(t, get(t, srv, "/fake/api", url.Values{
+		"t": {"tvsearch"}, "tvdbid": {"83920"}, "season": {"1"}, "ep": {"2"}, "cat": {"5000,5040"}, "apikey": {"secret"},
+	}))
+	if len(items) != 1 || items[0].Title != "Days.of.Honor.S01E02.1080p.WEB-DL.AAC.H.264-FAKE" {
+		t.Fatalf("items = %+v", items)
+	}
+	want := provider.Query{Kind: provider.Episode, Season: 1, Episode: 2}
+	if fp.gotTVDB != 83920 || fp.got != want {
+		t.Errorf("SearchTVDB(%d, %+v), want (83920, %+v)", fp.gotTVDB, fp.got, want)
+	}
+}
+
+// When a search by TVDB ID finds nothing, Sonarr searches by title. So it
+// must never return the placeholder, which would count as a result.
+func TestSearchByTVDBIDFindsNothing(t *testing.T) {
+	item := []provider.Item{{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1}}
+	for name, p := range map[string]provider.Provider{
+		"provider can't":   &fakeProvider{items: item},
+		"nothing found":    &fakeTVDBProvider{title: "Ranczo"},
+		"no title to name": &fakeTVDBProvider{fakeProvider: fakeProvider{items: item}},
+	} {
+		items := parseFeed(t, get(t, newServer(t, p), "/fake/api", url.Values{
+			"t": {"tvsearch"}, "tvdbid": {"81970"}, "season": {"1"}, "ep": {"1"}, "apikey": {"secret"},
+		}))
+		if len(items) != 0 {
+			t.Errorf("%s: items = %+v", name, items)
+		}
+	}
+}
+
+func TestSearchByTVDBIDError(t *testing.T) {
+	fp := &fakeTVDBProvider{title: "Days of Honor", err: errors.New("tvp: HTTP 500")}
+	body := get(t, newServer(t, fp), "/fake/api", url.Values{
+		"t": {"tvsearch"}, "tvdbid": {"83920"}, "season": {"1"}, "apikey": {"secret"},
+	})
+	if !strings.Contains(body, `<error code="900" description="Search failed: tvp: HTTP 500"`) {
+		t.Errorf("body = %s", body)
 	}
 }

@@ -65,6 +65,15 @@ type Provider interface {
 	Resolve(ctx context.Context, id string) (Stream, error) // called at download time
 }
 
+// TVDBSearcher is a Provider that can find a series by its TVDB ID alone.
+// Sonarr searches that way first, and by title only when that finds nothing.
+type TVDBSearcher interface {
+	// SearchTVDB is Search for the series with the TVDB ID; q has no Title.
+	// It also returns Sonarr's title for the series, which names the
+	// releases, as Sonarr won't import a release it matched only by ID.
+	SearchTVDB(ctx context.Context, tvdbID int, q Query) (title string, items []Item, err error)
+}
+
 // ErrUnavailable marks content that can't be downloaded (DRM, geo-blocked,
 // paid). It is not retried.
 var ErrUnavailable = errors.New("content unavailable")
