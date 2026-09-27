@@ -42,6 +42,33 @@ docker compose pull
 docker compose up -d
 ```
 
+### Linux service
+
+The `vodarr-bin` AUR package, and the `.deb` and `.rpm` packages on the
+[releases page](https://github.com/combor/vodarr/releases/latest), install
+vodarr as a systemd service. Set `VODARR_API_KEY` in `/etc/vodarr/vodarr.env`,
+then start vodarr and enable it at boot:
+
+```sh
+sudo systemctl enable --now vodarr
+```
+
+The service runs as the `vodarr` user in the `media` group, which the Arch
+Sonarr and Radarr packages also use, so they can import its downloads.
+Downloads go to `/var/lib/vodarr/downloads` unless you set
+`VODARR_DOWNLOAD_DIR`. Another folder must be writable by the `media` group and
+can't be under `/home`.
+
+If Sonarr/Radarr share a different group, run `sudo systemctl edit vodarr` and
+add:
+
+```ini
+[Service]
+Group=yourgroup
+```
+
+Run `sudo systemctl restart vodarr` after changing settings.
+
 ### Build from source
 
 To build from source, use Go 1.27+ and install `ffmpeg` for runtime use.
@@ -60,7 +87,8 @@ in Sonarr/Radarr.
 
 Set these environment variables or pass the equivalent command-line flags.
 Flags take precedence. For Docker, add any extra variables to the `environment`
-section in `compose.yaml`.
+section in `compose.yaml`. For the Linux service, set them in
+`/etc/vodarr/vodarr.env`.
 
 | Flag | Env | Default | Description |
 |---|---|---|---|
@@ -134,6 +162,8 @@ To inspect recent container messages:
 docker compose logs --tail 100 vodarr
 ```
 
+For the Linux service, use `journalctl -u vodarr -n 100`.
+
 For bugs or feature requests, [open an issue](https://github.com/combor/vodarr/issues).
 Include the steps to reproduce and any relevant error message, with API keys removed.
 
@@ -161,7 +191,9 @@ Everything else is shared.
 
 `make test` runs formatting checks, vet, and race tests. Install ffmpeg with the
 libx264 encoder to run the download-engine tests. `make docker-smoke` builds the
-container and checks startup and both APIs.
+container and checks startup and both APIs. `make package-smoke` builds the
+Linux packages with GoReleaser and checks that each installs, runs and uninstalls
+as a systemd service in Debian, Fedora and Arch containers.
 
 ## License
 

@@ -73,12 +73,34 @@ jobs:
           VODARR_SMOKE_IMAGE: vodarr:ci
         run: go test -count=1 -run TestContainerServesAPIs ./cmd/vodarr
 
+  package-smoke:
+    name: Package Smoke Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      # Also checks the GoReleaser configuration before a release needs it.
+      - name: Build the packages
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.2
+          args: release --snapshot --clean --skip=nix
+      - name: Install and run each package as a systemd service
+        env:
+          VODARR_SMOKE_DIST: ${{ github.workspace }}/dist
+        run: go test -count=1 -timeout 20m -run TestPackageService ./cmd/vodarr
+
   release:
     name: Release
     needs:
       - test
       - govulncheck
       - container-smoke
+      - package-smoke
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     # Notarization waits on Apple per darwin binary in turn, up to 20 minutes
