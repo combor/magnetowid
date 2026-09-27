@@ -25,8 +25,6 @@ installation.
 
 Currently supported: **TVP VOD**. More providers are planned.
 
-> Proof of concept: the queue and history are lost on restart.
-
 ## How it works
 
 ```mermaid

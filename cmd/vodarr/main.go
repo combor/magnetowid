@@ -71,7 +71,11 @@ func run(log *slog.Logger) error {
 		tvp.New(httpClient, log),
 	)
 
-	queue := downloader.New(dir, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)
+	queue, err := downloader.New(dir, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)
+	if err != nil {
+		return err
+	}
+	defer queue.Close()
 	mux := http.NewServeMux()
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Log: log})
 	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})

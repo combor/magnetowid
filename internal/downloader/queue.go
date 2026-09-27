@@ -9,12 +9,16 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/combor/vodarr/internal/nzb"
 	"github.com/combor/vodarr/internal/provider"
@@ -46,38 +50,53 @@ func backoff(n int) time.Duration {
 	return min(d, maxRetryDelay)
 }
 
-var errUnknownProvider = errors.New("unknown provider")
+var (
+	errUnknownProvider = errors.New("unknown provider")
+	// errUnreachable marks a failure to reach the provider at all, as opposed
+	// to one item's stream.
+	errUnreachable = errors.New("provider unreachable")
+)
 
 // Engine fetches a stream into out.
 type Engine interface {
 	Download(ctx context.Context, s provider.Stream, out string, progress func(done time.Duration, bytes int64)) error
 }
 
-// Job is a snapshot of one download.
+// Job is a snapshot of one download. The JSON form is its database record.
 type Job struct {
-	ID       string
-	Name     string
-	NZBName  string
-	Category string
-	Ref      nzb.Ref
-	Status   Status
-	Added    time.Time
-	Started  time.Time
-	Finished time.Time
-	Fraction float64 // 0..1
-	Bytes    int64   // written so far, or final size
-	Storage  string  // completed job folder
-	Error    string
-	Attempts int
-	RetryAt  time.Time
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	NZBName  string    `json:"nzb_name"`
+	Category string    `json:"category"`
+	Ref      nzb.Ref   `json:"ref"`
+	Status   Status    `json:"status"`
+	Added    time.Time `json:"added"`
+	Started  time.Time `json:"started,omitzero"`
+	Finished time.Time `json:"finished,omitzero"`
+	Fraction float64   `json:"fraction,omitzero"` // 0..1
+	Bytes    int64     `json:"bytes,omitzero"`    // written so far, or final size
+	Storage  string    `json:"storage,omitzero"`  // completed job folder
+	Error    string    `json:"error,omitzero"`
+	Attempts int       `json:"attempts,omitzero"`
+	RetryAt  time.Time `json:"retry_at,omitzero"`
+	Priority int       `json:"priority,omitzero"` // -1 low, 0 normal, 1 high, 2 force
 }
 
-// Queue holds jobs in memory and runs them with a single worker.
+// historyRetention is how long finished jobs are kept. Sonarr/Radarr handle
+// them within minutes and usually remove them themselves.
+const historyRetention = 30 * 24 * time.Hour
+
+// incompleteDir, under the download root, holds one work folder per running job.
+const incompleteDir = ".incomplete"
+
+// Queue runs jobs with a single worker. It keeps them in memory and saves
+// them to the job database when added, deleted or done with an attempt.
 type Queue struct {
 	dir       string
 	providers *provider.Registry
 	engine    Engine
 	log       *slog.Logger
+	db        *bolt.DB
 
 	retryDelay func(n int) time.Duration
 
@@ -85,28 +104,53 @@ type Queue struct {
 	jobs    map[string]*Job
 	order   []string
 	cancels map[string]context.CancelFunc
+	outages map[string]*outage // by provider name
 	wake    chan struct{}
 }
 
-// New returns a queue that downloads into dir, which must be absolute.
-func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logger) *Queue {
-	return &Queue{
+// outage pauses a provider's jobs after it couldn't be reached n times in a row.
+type outage struct {
+	n     int
+	until time.Time
+}
+
+// New opens the queue that downloads into dir, which must be absolute, with
+// the jobs saved there. Close it when done.
+func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logger) (*Queue, error) {
+	db, jobs, err := openDB(dir)
+	if err != nil {
+		return nil, err
+	}
+	// Nothing is running yet, so any work folders are left over from a crash.
+	if err := os.RemoveAll(filepath.Join(dir, incompleteDir)); err != nil {
+		log.Warn("removing unfinished downloads", "err", err)
+	}
+	q := &Queue{
 		dir:        dir,
 		providers:  providers,
 		engine:     engine,
 		log:        log,
+		db:         db,
 		retryDelay: backoff,
 		jobs:       make(map[string]*Job),
 		cancels:    make(map[string]context.CancelFunc),
+		outages:    make(map[string]*outage),
 		wake:       make(chan struct{}, 1),
 	}
+	for _, j := range jobs {
+		q.jobs[j.ID] = j
+		q.order = append(q.order, j.ID)
+	}
+	q.prune(time.Now())
+	return q, nil
 }
 
 // Dir returns the download root.
 func (q *Queue) Dir() string { return q.dir }
 
-// Add queues a job and returns its SABnzbd-style ID.
-func (q *Queue) Add(name, nzbName, category string, ref nzb.Ref) string {
+// Add queues a job and returns its SABnzbd-style ID. Higher priority jobs
+// start first. It fails if the job can't be saved.
+func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) (string, error) {
 	job := &Job{
 		ID:       "SABnzbd_nzo_" + randomHex(8),
 		Name:     SanitizeName(name),
@@ -115,17 +159,23 @@ func (q *Queue) Add(name, nzbName, category string, ref nzb.Ref) string {
 		Ref:      ref,
 		Status:   StatusQueued,
 		Added:    time.Now(),
+		Priority: priority,
 	}
 	q.mu.Lock()
+	if err := q.put(job); err != nil {
+		q.mu.Unlock()
+		return "", err
+	}
 	q.jobs[job.ID] = job
 	q.order = append(q.order, job.ID)
 	q.mu.Unlock()
-	q.log.Info("job queued", "id", job.ID, "name", job.Name, "category", category, "provider", ref.Provider, "ref", ref.ID)
+	q.log.Info("job queued", "id", job.ID, "name", job.Name, "category", category, "priority", priority,
+		"provider", ref.Provider, "ref", ref.ID)
 	select {
 	case q.wake <- struct{}{}:
 	default:
 	}
-	return job.ID
+	return job.ID, nil
 }
 
 // Jobs returns snapshots of all jobs in the order they were added.
@@ -140,13 +190,18 @@ func (q *Queue) Jobs() []Job {
 }
 
 // Delete removes a job, cancelling it if running, and with deleteFiles its
-// folder. It reports whether the job existed.
-func (q *Queue) Delete(id string, deleteFiles bool) bool {
+// folder. It returns false if there is no such job, and an error, changing
+// nothing, if the removal can't be saved.
+func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
 	q.mu.Lock()
 	job, ok := q.jobs[id]
 	if !ok {
 		q.mu.Unlock()
-		return false
+		return false, nil
+	}
+	if err := q.remove(id); err != nil {
+		q.mu.Unlock()
+		return false, err
 	}
 	delete(q.jobs, id)
 	for i, v := range q.order {
@@ -168,12 +223,16 @@ func (q *Queue) Delete(id string, deleteFiles bool) bool {
 		cancel()
 	}
 	q.log.Info("job deleted", "id", id, "delete_files", deleteFiles)
-	return true
+	return true, nil
 }
 
 // Run processes queued jobs until ctx is cancelled.
 func (q *Queue) Run(ctx context.Context) {
 	for {
+		// Checked first, so a cancelled queue doesn't start the next job.
+		if ctx.Err() != nil {
+			return
+		}
 		id, wait, ok := q.next()
 		if ok {
 			q.process(ctx, id)
@@ -193,35 +252,43 @@ func (q *Queue) Run(ctx context.Context) {
 		if timer != nil {
 			timer.Stop()
 		}
-		if ctx.Err() != nil {
-			return
-		}
 	}
 }
 
-// next starts the oldest ready job. If none is ready, wait is the time until
-// the earliest retry.
+// next starts the ready job with the highest priority, oldest first. If none
+// is ready, wait is the time until the earliest retry or end of a provider
+// pause.
 func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	now := time.Now()
+	var best *Job
 	for _, id := range q.order {
 		job := q.jobs[id]
 		if job.Status != StatusQueued {
 			continue
 		}
-		if until := job.RetryAt.Sub(now); until > 0 {
-			if wait == 0 || until < wait {
-				wait = until
+		until := job.RetryAt
+		if o := q.outages[job.Ref.Provider]; o != nil && o.until.After(until) {
+			until = o.until
+		}
+		if d := until.Sub(now); d > 0 {
+			if wait == 0 || d < wait {
+				wait = d
 			}
 			continue
 		}
-		job.Status = StatusDownloading
-		job.Started = now
-		job.Attempts++
-		return id, 0, true
+		if best == nil || job.Priority > best.Priority {
+			best = job
+		}
 	}
-	return "", wait, false
+	if best == nil {
+		return "", wait, false
+	}
+	best.Status = StatusDownloading
+	best.Started = now
+	best.Attempts++
+	return best.ID, 0, true
 }
 
 func (q *Queue) process(parent context.Context, id string) {
@@ -239,7 +306,7 @@ func (q *Queue) process(parent context.Context, id string) {
 	q.mu.Unlock()
 
 	q.log.Info("job started", "id", id, "name", j.Name)
-	work := filepath.Join(q.dir, ".incomplete", id)
+	work := filepath.Join(q.dir, incompleteDir, id)
 	storage, err := q.run(ctx, id, j, work)
 	if rmErr := os.RemoveAll(work); rmErr != nil {
 		q.log.Warn("removing work dir", "id", id, "err", rmErr)
@@ -256,10 +323,42 @@ func (q *Queue) process(parent context.Context, id string) {
 		}
 		return
 	}
+	// Every outcome below is saved; progress while running is not, so a
+	// crash leaves the job Queued with its earlier attempts.
+	defer func() {
+		if err := q.put(job); err != nil {
+			q.log.Warn("database write failed", "err", err)
+		}
+		q.prune(time.Now())
+	}()
+	if err != nil && parent.Err() != nil {
+		// Interrupted by shutdown, which is not the job's fault.
+		requeue(job)
+		q.log.Info("job interrupted, requeued", "id", id, "name", job.Name)
+		return
+	}
+	if errors.Is(err, errUnreachable) {
+		// The provider is unreachable, so every job for it would fail the
+		// same way. Pause them all rather than use up this job's retries.
+		requeue(job)
+		job.Error = err.Error()
+		o := q.outages[job.Ref.Provider]
+		if o == nil {
+			o = &outage{}
+			q.outages[job.Ref.Provider] = o
+		}
+		o.n++
+		delay := q.retryDelay(o.n)
+		o.until = time.Now().Add(delay)
+		q.log.Warn("pausing provider's jobs", "provider", job.Ref.Provider,
+			"retry_in", delay, "err", err)
+		return
+	}
+	delete(q.outages, job.Ref.Provider)
 	job.Finished = time.Now()
 	if err != nil {
 		job.Error = err.Error()
-		if retryable(parent, err) && job.Attempts <= maxRetries {
+		if retryable(err) && job.Attempts <= maxRetries {
 			delay := q.retryDelay(job.Attempts)
 			job.Status = StatusQueued
 			job.RetryAt = job.Finished.Add(delay)
@@ -279,10 +378,49 @@ func (q *Queue) process(parent context.Context, id string) {
 	q.log.Info("job completed", "id", id, "name", job.Name, "storage", storage, "bytes", job.Bytes)
 }
 
+// prune forgets finished jobs older than historyRetention but leaves their
+// files, which belong to Sonarr/Radarr. q.mu must be held.
+func (q *Queue) prune(now time.Time) {
+	var old []string
+	for _, id := range q.order {
+		j := q.jobs[id]
+		if (j.Status == StatusCompleted || j.Status == StatusFailed) && now.Sub(j.Finished) > historyRetention {
+			old = append(old, id)
+		}
+	}
+	if len(old) == 0 {
+		return
+	}
+	// Kept in memory until removed on disk, so a failure is retried next time.
+	if err := q.remove(old...); err != nil {
+		q.log.Warn("database write failed", "err", err)
+		return
+	}
+	for _, id := range old {
+		delete(q.jobs, id)
+	}
+	q.order = slices.DeleteFunc(q.order, func(id string) bool { return q.jobs[id] == nil })
+	q.log.Info("forgot old finished jobs", "count", len(old))
+}
+
+// requeue returns a started job to the queue without counting the attempt.
+func requeue(job *Job) {
+	job.Status = StatusQueued
+	job.Attempts--
+	job.Fraction, job.Bytes = 0, 0
+}
+
+// offline reports whether err is a network failure (DNS, connection or
+// timeout) rather than a problem with the item.
+func offline(err error) bool {
+	var op *net.OpError
+	var ne net.Error
+	return errors.As(err, &op) || (errors.As(err, &ne) && ne.Timeout())
+}
+
 // retryable reports whether a failed attempt is worth retrying.
-func retryable(parent context.Context, err error) bool {
-	return parent.Err() == nil &&
-		!errors.Is(err, provider.ErrUnavailable) &&
+func retryable(err error) bool {
+	return !errors.Is(err, provider.ErrUnavailable) &&
 		!errors.Is(err, errUnknownProvider)
 }
 
@@ -312,6 +450,9 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 
 	// Stream URLs expire, so resolve on every attempt.
 	s, err := p.Resolve(ctx, j.Ref.ID)
+	if err != nil && offline(err) {
+		return "", fmt.Errorf("%w: %w", errUnreachable, err)
+	}
 	if err != nil {
 		return "", err
 	}

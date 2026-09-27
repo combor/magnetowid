@@ -39,7 +39,11 @@ func (fakeEngine) Download(_ context.Context, _ provider.Stream, out string, pro
 func newServer(t *testing.T, runWorker bool) (*httptest.Server, *downloader.Queue) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	q := downloader.New(t.TempDir(), provider.NewRegistry(fakeProvider{}), fakeEngine{}, log)
+	q, err := downloader.New(t.TempDir(), provider.NewRegistry(fakeProvider{}), fakeEngine{}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
 	if runWorker {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
@@ -69,8 +73,13 @@ func call(t *testing.T, srv *httptest.Server, params url.Values) map[string]any 
 	return out
 }
 
-// addFile uploads an NZB the way Sonarr/Radarr do.
+// addFile uploads an NZB the way Sonarr/Radarr do, with the default priority.
 func addFile(t *testing.T, srv *httptest.Server, filename string, body []byte) map[string]any {
+	t.Helper()
+	return addFileWithPriority(t, srv, filename, body, "-100")
+}
+
+func addFileWithPriority(t *testing.T, srv *httptest.Server, filename string, body []byte, priority string) map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -80,7 +89,7 @@ func addFile(t *testing.T, srv *httptest.Server, filename string, body []byte) m
 	}
 	fw.Write(body)
 	mw.Close()
-	u := srv.URL + "/api?" + url.Values{"mode": {"addfile"}, "cat": {"tv"}, "priority": {"-100"},
+	u := srv.URL + "/api?" + url.Values{"mode": {"addfile"}, "cat": {"tv"}, "priority": {priority},
 		"apikey": {"secret"}, "output": {"json"}}.Encode()
 	resp, err := http.Post(u, mw.FormDataContentType(), &buf)
 	if err != nil {
@@ -159,12 +168,31 @@ func TestAddFileQueuesJob(t *testing.T) {
 	}
 	s := slots[0].(map[string]any)
 	if s["nzo_id"] != ids[0] || s["filename"] != "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP" ||
-		s["cat"] != "tv" || s["status"] != "Queued" || s["timeleft"] != "0:00:00" || s["mb"] != "28.61" {
+		s["cat"] != "tv" || s["status"] != "Queued" || s["timeleft"] != "0:00:00" || s["mb"] != "28.61" ||
+		s["priority"] != "Normal" {
 		t.Errorf("slot = %v", s)
 	}
 	other := call(t, srv, url.Values{"mode": {"queue"}, "category": {"movies"}})["queue"].(map[string]any)
 	if len(other["slots"].([]any)) != 0 {
 		t.Errorf("category filter: %v", other)
+	}
+}
+
+func TestAddFilePriority(t *testing.T) {
+	srv, q := newServer(t, false)
+	addFileWithPriority(t, srv, "A.nzb", vodarrNZB(t), "1")
+	slots := call(t, srv, url.Values{"mode": {"queue"}})["queue"].(map[string]any)["slots"].([]any)
+	if len(slots) != 1 || slots[0].(map[string]any)["priority"] != "High" || q.Jobs()[0].Priority != 1 {
+		t.Fatalf("slots = %v", slots)
+	}
+}
+
+func TestParsePriority(t *testing.T) {
+	tests := map[string]int{"-100": 0, "": 0, "x": 0, "-2": -1, "-1": -1, "0": 0, "1": 1, "2": 2, "3": 2}
+	for in, want := range tests {
+		if got := parsePriority(in); got != want {
+			t.Errorf("parsePriority(%q) = %d, want %d", in, got, want)
+		}
 	}
 }
 
@@ -212,6 +240,50 @@ func TestHistoryAndDelete(t *testing.T) {
 	}
 	if _, err := os.Stat(storage); !os.IsNotExist(err) {
 		t.Errorf("storage not removed: %v", err)
+	}
+}
+
+// When a change can't be saved, the *arr is told it failed.
+func TestUnsavedChangesFail(t *testing.T) {
+	srv, q := newServer(t, false)
+	id := addFile(t, srv, "A.nzb", vodarrNZB(t))["nzo_ids"].([]any)[0].(string)
+	q.Close() // every database write fails from here on
+	if out := addFile(t, srv, "B.nzb", vodarrNZB(t)); out["status"] != false {
+		t.Errorf("addfile = %v", out)
+	}
+	if del := call(t, srv, url.Values{"mode": {"queue"}, "name": {"delete"}, "value": {id}}); del["status"] != false {
+		t.Errorf("delete = %v", del)
+	}
+	if jobs := q.Jobs(); len(jobs) != 1 || jobs[0].ID != id {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
+// Sonarr/Radarr page history with start and limit.
+func TestHistoryPaging(t *testing.T) {
+	srv, _ := newServer(t, true)
+	for _, name := range []string{"A.nzb", "B.nzb", "C.nzb"} {
+		addFile(t, srv, name, vodarrNZB(t))
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		h := call(t, srv, url.Values{"mode": {"history"}})["history"].(map[string]any)
+		if h["noofslots"] == float64(3) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("history = %v", h)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	h := call(t, srv, url.Values{"mode": {"history"}, "start": {"1"}, "limit": {"1"}})["history"].(map[string]any)
+	slots := h["slots"].([]any)
+	if h["noofslots"] != float64(3) || len(slots) != 1 || slots[0].(map[string]any)["name"] != "B" {
+		t.Fatalf("history = %v", h)
+	}
+	h = call(t, srv, url.Values{"mode": {"history"}, "start": {"5"}})["history"].(map[string]any)
+	if h["noofslots"] != float64(3) || len(h["slots"].([]any)) != 0 {
+		t.Fatalf("past the end: %v", h)
 	}
 }
 

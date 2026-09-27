@@ -8,7 +8,7 @@ vodarr needs no changes to either app: it looks like two things they already sup
 
 Supported sites: **TVP VOD** (`tvp`).
 
-> Proof of concept: minimal features, and jobs are kept in memory only.
+> Proof of concept: minimal features.
 
 ## Install and run
 
@@ -66,7 +66,7 @@ section in `compose.yaml`.
 |---|---|---|---|
 | `-listen` | `VODARR_LISTEN` | `:8484` | listen address |
 | `-api-key` | `VODARR_API_KEY` | | required; used by both APIs |
-| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/` |
+| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the job database to `<dir>/.vodarr-jobs.db` |
 | `-categories` | `VODARR_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `VODARR_FFMPEG` | `ffmpeg` | ffmpeg binary |
 
@@ -79,6 +79,7 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - Host and port: vodarr's host and port.
    - API key: the one vodarr was started with.
    - Category: `tv` (Sonarr) or `movies` (Radarr).
+   - Priority settings (optional): vodarr downloads one job at a time and starts higher-priority jobs first. Paused counts as Low.
 2. **Indexer:** Settings → Indexers → **Newznab**, one per site.
    - Name: e.g. "TVP VOD".
    - URL: `http://<host>:8484/tvp`, API path `/api`, the same API key.
@@ -125,6 +126,7 @@ manage downloads in Sonarr/Radarr.
 | The container cannot find or write to the download folder | Create `VODARR_DOWNLOAD_PATH` before starting and check that `VODARR_UID` and `VODARR_GID` have write access. |
 | Downloads finish but are not imported | Mount the shared folder into Sonarr/Radarr, check file permissions and add a Remote Path Mapping if the paths differ. |
 | A vodarr release is sent to another download client | Set the indexer's **Download Client** to `vodarr`. |
+| Downloads stay queued and the log says `provider unreachable` | vodarr can't reach the site, for example because the network, DNS or VPN is down. Jobs wait and resume on their own once the site is reachable; they don't fail. |
 
 To inspect recent container messages:
 
@@ -144,7 +146,7 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 - **Release details:**
   - Releases are always named `1080p`; ffmpeg downloads the best quality available.
   - Only a single audio track is kept, and no subtitles.
-- **Restarts:** the queue and history are lost when vodarr restarts.
+- **Restarts:** the queue and history are saved in `.vodarr-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one vodarr can use it at a time.
 
 ## Adding a site
 

@@ -64,7 +64,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.delete(w, r)
 			return
 		}
-		writeJSON(w, map[string]any{"history": h.history(r.FormValue("category"))})
+		start, _ := strconv.Atoi(r.FormValue("start"))
+		limit, _ := strconv.Atoi(r.FormValue("limit"))
+		writeJSON(w, map[string]any{"history": h.history(r.FormValue("category"), start, limit)})
 	default:
 		writeJSON(w, errorResponse(fmt.Sprintf("mode %q not supported", mode)))
 	}
@@ -93,8 +95,26 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = strings.TrimSuffix(header.Filename, ".nzb")
 	}
-	id := h.Queue.Add(name, header.Filename, r.FormValue("cat"), ref)
+	id, err := h.Queue.Add(name, header.Filename, r.FormValue("cat"), parsePriority(r.FormValue("priority")), ref)
+	if err != nil {
+		h.Log.Error("queueing job", "name", name, "err", err)
+		writeJSON(w, errorResponse(err.Error()))
+		return
+	}
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{id}})
+}
+
+// priorityNames are the SABnzbd priorities vodarr supports, from -1.
+var priorityNames = []string{"Low", "Normal", "High", "Force"}
+
+// parsePriority reads addfile's priority. The *arr default (-100) counts as
+// Normal, and Paused (-2), which vodarr doesn't support, as Low.
+func parsePriority(s string) int {
+	p, err := strconv.Atoi(s)
+	if err != nil || p == -100 {
+		return 0
+	}
+	return min(max(p, -1), 2)
 }
 
 func formFile(r *http.Request, fields ...string) (multipart.File, *multipart.FileHeader, error) {
@@ -113,7 +133,16 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	deleteFiles := r.FormValue("del_files") == "1"
 	var ids []string
 	for _, id := range strings.Split(r.FormValue("value"), ",") {
-		if id = strings.TrimSpace(id); id != "" && h.Queue.Delete(id, deleteFiles) {
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		ok, err := h.Queue.Delete(id, deleteFiles)
+		if err != nil {
+			h.Log.Error("deleting job", "id", id, "err", err)
+			writeJSON(w, errorResponse(err.Error()))
+			return
+		}
+		if ok {
 			ids = append(ids, id)
 		}
 	}
@@ -182,7 +211,7 @@ func (h *Handler) queue(cat string) map[string]any {
 			Filename:   j.Name,
 			Category:   j.Category,
 			Status:     string(j.Status),
-			Priority:   "Normal",
+			Priority:   priorityNames[j.Priority+1],
 			MB:         megabytes(total),
 			MBLeft:     megabytes(int64(float64(total) * (1 - j.Fraction))),
 			Percentage: strconv.Itoa(int(j.Fraction * 100)),
@@ -204,8 +233,9 @@ type historySlot struct {
 	FailMessage  string `json:"fail_message"`
 }
 
-// history lists finished jobs, newest first like SABnzbd.
-func (h *Handler) history(cat string) map[string]any {
+// history lists finished jobs, newest first like SABnzbd. It returns up to
+// limit (0 = all) of them after skipping start, and the total count.
+func (h *Handler) history(cat string, start, limit int) map[string]any {
 	jobs := h.Queue.Jobs()
 	slots := []historySlot{}
 	for i := len(jobs) - 1; i >= 0; i-- {
@@ -226,7 +256,12 @@ func (h *Handler) history(cat string) map[string]any {
 			FailMessage:  j.Error,
 		})
 	}
-	return map[string]any{"noofslots": len(slots), "slots": slots}
+	total := len(slots)
+	slots = slots[min(max(start, 0), total):]
+	if limit > 0 && len(slots) > limit {
+		slots = slots[:limit]
+	}
+	return map[string]any{"noofslots": total, "slots": slots}
 }
 
 // estimatedSize extrapolates from progress, or guesses from the duration.
