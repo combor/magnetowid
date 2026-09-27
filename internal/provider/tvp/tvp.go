@@ -26,12 +26,13 @@ const (
 type Provider struct {
 	client  *http.Client
 	baseURL string
+	titles  *titleLookup
 	log     *slog.Logger
 }
 
 // New returns a TVP provider using client for API calls.
 func New(client *http.Client, log *slog.Logger) *Provider {
-	return &Provider{client: client, baseURL: defaultBaseURL, log: log}
+	return &Provider{client: client, baseURL: defaultBaseURL, titles: newTitleLookup(client), log: log}
 }
 
 func (p *Provider) Name() string { return "tvp" }
