@@ -56,6 +56,13 @@ archives:
       - goos: windows
         formats:
           - zip
+    # The AUR package installs the systemd files from the archive.
+    files:
+      - LICENSE
+      - README.md
+      - src: packaging/linux/vodarr.{service,sysusers,env}
+        dst: systemd
+        strip_parent: true
 
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
@@ -79,6 +86,12 @@ nfpms:
     dependencies:
       - ca-certificates
       - ffmpeg
+    overrides:
+      rpm:
+        # Fedora's ffmpeg-free provides the binary but not the ffmpeg name.
+        dependencies:
+          - ca-certificates
+          - /usr/bin/ffmpeg
     rpm:
       signature:
         key_file: '{{ if isEnvSet "GPG_KEY_PATH" }}{{ .Env.GPG_KEY_PATH }}{{ end }}'
@@ -89,6 +102,21 @@ nfpms:
       - src: LICENSE
         dst: /usr/share/doc/vodarr/copyright
         packager: deb
+      - src: packaging/linux/vodarr.service
+        dst: /usr/lib/systemd/system/vodarr.service
+      - src: packaging/linux/vodarr.sysusers
+        dst: /usr/lib/sysusers.d/vodarr.conf
+      - dst: /etc/vodarr
+        type: dir
+      - src: packaging/linux/vodarr.env
+        dst: /etc/vodarr/vodarr.env
+        type: config|noreplace
+        file_info:
+          mode: 0600
+    scripts:
+      postinstall: packaging/linux/postinstall.sh
+      preremove: packaging/linux/preremove.sh
+      postremove: packaging/linux/postremove.sh
 
 aurs:
   - name: vodarr-bin
@@ -107,9 +135,15 @@ aurs:
     depends:
       - ca-certificates
       - ffmpeg
+    backup:
+      - etc/vodarr/vodarr.env
+    install: packaging/linux/vodarr.install
     package: |-
       install -Dm755 "./vodarr" "${pkgdir}/usr/bin/vodarr"
       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/vodarr-bin/LICENSE"
+      install -Dm644 "./systemd/vodarr.service" "${pkgdir}/usr/lib/systemd/system/vodarr.service"
+      install -Dm644 "./systemd/vodarr.sysusers" "${pkgdir}/usr/lib/sysusers.d/vodarr.conf"
+      install -Dm600 "./systemd/vodarr.env" "${pkgdir}/etc/vodarr/vodarr.env"
 
 homebrew_casks:
   - name: vodarr

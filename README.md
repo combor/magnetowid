@@ -67,7 +67,8 @@ docker compose up -d
 ```
 
 Compose pulls `ghcr.io/combor/vodarr:latest` and exposes the APIs on port **8484**.
-Continue below to connect your apps. For a native installation, see
+Continue below to connect your apps. For a native installation, see the
+[Linux service](docs/usage.md#linux-service) or
 [building from source](docs/usage.md#build-from-source).
 
 ## Connect Sonarr and Radarr

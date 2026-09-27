@@ -1,0 +1,4 @@
+post_install() {
+	echo "Set VODARR_API_KEY in /etc/vodarr/vodarr.env, then start vodarr with:"
+	echo "  systemctl enable --now vodarr"
+}
