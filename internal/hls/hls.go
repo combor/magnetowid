@@ -1,4 +1,6 @@
-package downloader
+// Package hls reads HLS master playlists and picks the variant vodarr
+// downloads.
+package hls
 
 import (
 	"bufio"
@@ -10,27 +12,40 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/combor/vodarr/internal/provider"
 )
 
-var defaultClient = &http.Client{Timeout: 30 * time.Second}
-
 // RFC 6381 codec prefixes of video codecs.
 var videoCodecs = []string{"avc1", "avc3", "hvc1", "hev1", "dvh1", "dvhe", "vp09", "av01", "mp4v"}
 
-// pickInputs returns the URLs ffmpeg should read. For an HLS master playlist
-// it picks the best video variant and its audio rendition, since ffmpeg would
-// otherwise probe every variant first. Other URLs are passed through.
-func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]string, error) {
+// Variant is one #EXT-X-STREAM-INF entry.
+type Variant struct {
+	URI           string
+	Width, Height int
+	Bandwidth     int64  // BANDWIDTH, peak bits per second
+	Average       int64  // AVERAGE-BANDWIDTH, 0 if not given
+	Codecs        string // RFC 6381, e.g. "avc1.640029,mp4a.40.2"
+	audio         string // AUDIO group ID
+}
+
+// Master is a master playlist's best video variant and its audio rendition,
+// with URIs resolved against the playlist's final URL.
+type Master struct {
+	Video Variant
+	Audio string // "" when the audio is in the variant
+}
+
+// Load fetches s and picks its best variant. ok is false when s isn't an HLS
+// master playlist; URLs not ending in .m3u8 aren't fetched.
+func Load(ctx context.Context, client *http.Client, s provider.Stream) (m Master, ok bool, err error) {
 	base, err := url.Parse(s.URL)
 	if err != nil || !strings.HasSuffix(strings.ToLower(base.Path), ".m3u8") {
-		return []string{s.URL}, nil
+		return Master{}, false, nil
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.URL, nil)
 	if err != nil {
-		return nil, err
+		return Master{}, false, err
 	}
 	for k, vs := range s.Header {
 		for _, v := range vs {
@@ -39,35 +54,27 @@ func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching playlist: %w", err)
+		return Master{}, false, fmt.Errorf("fetching playlist: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("fetching playlist: HTTP %d", resp.StatusCode)
+		return Master{}, false, fmt.Errorf("fetching playlist: HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, fmt.Errorf("fetching playlist: %w", err)
+		return Master{}, false, fmt.Errorf("fetching playlist: %w", err)
 	}
 
 	video, audio, ok := selectRenditions(string(body))
 	if !ok {
-		return []string{s.URL}, nil
+		return Master{}, false, nil
 	}
 	base = resp.Request.URL // after redirects
-	inputs := []string{resolve(base, video)}
+	video.URI = resolve(base, video.URI)
 	if audio != "" {
-		inputs = append(inputs, resolve(base, audio))
+		audio = resolve(base, audio)
 	}
-	return inputs, nil
-}
-
-type variant struct {
-	uri       string
-	bandwidth int64
-	pixels    int
-	audio     string // AUDIO group ID
-	codecs    string
+	return Master{Video: video, Audio: audio}, true, nil
 }
 
 type rendition struct {
@@ -75,11 +82,11 @@ type rendition struct {
 	isDefault, autoPick bool
 }
 
-// selectRenditions returns the best video variant URI and its separate audio
+// selectRenditions returns the best video variant and its separate audio
 // rendition URI, if any. ok is false for anything but a usable master
 // playlist.
-func selectRenditions(playlist string) (video, audio string, ok bool) {
-	var variants []variant
+func selectRenditions(playlist string) (video Variant, audio string, ok bool) {
+	var variants []Variant
 	var audios []rendition
 	var pending map[string]string
 	sc := bufio.NewScanner(strings.NewReader(playlist))
@@ -99,9 +106,11 @@ func selectRenditions(playlist string) (video, audio string, ok bool) {
 		case line == "" || strings.HasPrefix(line, "#"):
 		case pending != nil:
 			bw, _ := strconv.ParseInt(pending["BANDWIDTH"], 10, 64)
-			variants = append(variants, variant{
-				uri: line, bandwidth: bw, pixels: pixels(pending["RESOLUTION"]),
-				audio: pending["AUDIO"], codecs: pending["CODECS"],
+			avg, _ := strconv.ParseInt(pending["AVERAGE-BANDWIDTH"], 10, 64)
+			w, h := dimensions(pending["RESOLUTION"])
+			variants = append(variants, Variant{
+				URI: line, Width: w, Height: h, Bandwidth: bw, Average: avg,
+				Codecs: pending["CODECS"], audio: pending["AUDIO"],
 			})
 			pending = nil
 		}
@@ -109,21 +118,22 @@ func selectRenditions(playlist string) (video, audio string, ok bool) {
 
 	candidates := variants[:0]
 	for _, v := range variants {
-		if hasVideo(v.codecs) {
+		if hasVideo(v.Codecs) {
 			candidates = append(candidates, v)
 		}
 	}
 	if len(candidates) == 0 {
-		return "", "", false
+		return Variant{}, "", false
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
-		if candidates[i].pixels != candidates[j].pixels {
-			return candidates[i].pixels > candidates[j].pixels
+		pi, pj := candidates[i].Width*candidates[i].Height, candidates[j].Width*candidates[j].Height
+		if pi != pj {
+			return pi > pj
 		}
-		return candidates[i].bandwidth > candidates[j].bandwidth
+		return candidates[i].Bandwidth > candidates[j].Bandwidth
 	})
 	best := candidates[0]
-	return best.uri, pickAudio(audios, best.audio), true
+	return best, pickAudio(audios, best.audio), true
 }
 
 // pickAudio returns the URI of the group's DEFAULT, else AUTOSELECT, else
@@ -173,14 +183,15 @@ func hasVideo(codecs string) bool {
 	return false
 }
 
-func pixels(resolution string) int {
+// dimensions parses a RESOLUTION such as "1920x1080"; 0, 0 if absent.
+func dimensions(resolution string) (width, height int) {
 	w, h, ok := strings.Cut(resolution, "x")
 	if !ok {
-		return 0
+		return 0, 0
 	}
-	wi, _ := strconv.Atoi(w)
-	hi, _ := strconv.Atoi(h)
-	return wi * hi
+	width, _ = strconv.Atoi(w)
+	height, _ = strconv.Atoi(h)
+	return width, height
 }
 
 // parseAttrs parses an HLS attribute list.

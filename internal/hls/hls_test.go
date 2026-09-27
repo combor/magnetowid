@@ -1,4 +1,4 @@
-package downloader
+package hls
 
 import (
 	"context"
@@ -26,16 +26,21 @@ nv-hlsfmp4-index-vod4-f1-v1.m3u8
 
 func TestSelectRenditions(t *testing.T) {
 	tests := []struct {
-		name, playlist, video, audio string
-		ok                           bool
+		name, playlist string
+		video          Variant
+		audio          string
+		ok             bool
 	}{
-		{"tvp", tvpMaster, "nv-hlsfmp4-index-vod4-f7-v1.m3u8", "nv-hlsfmp4-index-vod4-f1-a1.m3u8", true},
-		{"muxed audio", `#EXTM3U
+		{"tvp", tvpMaster, Variant{
+			URI: "nv-hlsfmp4-index-vod4-f7-v1.m3u8", Width: 1920, Height: 1080, Bandwidth: 5118260,
+			Codecs: "avc1.640029,mp4a.40.2", audio: "audio0",
+		}, "nv-hlsfmp4-index-vod4-f1-a1.m3u8", true},
+		{"muxed audio, average bandwidth", `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
 low.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720
+#EXT-X-STREAM-INF:BANDWIDTH=2000000,AVERAGE-BANDWIDTH=1500000,RESOLUTION=1280x720
 high.m3u8
-`, "high.m3u8", "", true},
+`, Variant{URI: "high.m3u8", Width: 1280, Height: 720, Bandwidth: 2000000, Average: 1500000}, "", true},
 		{"audio-only variant and no resolutions", `#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="en.m3u8"
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",AUTOSELECT=YES,URI="pl.m3u8"
@@ -43,31 +48,31 @@ high.m3u8
 audio-only.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=300000,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="a"
 video.m3u8
-`, "video.m3u8", "pl.m3u8", true},
+`, Variant{URI: "video.m3u8", Bandwidth: 300000, Codecs: "avc1.4d401f,mp4a.40.2", audio: "a"}, "pl.m3u8", true},
 		{"default audio muxed into the variant", `#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",DEFAULT=YES,AUTOSELECT=YES
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="en.m3u8"
 #EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="a"
 video.m3u8
-`, "video.m3u8", "", true},
+`, Variant{URI: "video.m3u8", Width: 1280, Height: 720, Bandwidth: 2000000, audio: "a"}, "", true},
 		{"no codecs means video, bandwidth breaks ties", `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=1
 a.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=2
 b.m3u8
-`, "b.m3u8", "", true},
+`, Variant{URI: "b.m3u8", Bandwidth: 2}, "", true},
 		{"media playlist", `#EXTM3U
 #EXT-X-TARGETDURATION:4
 #EXT-X-MAP:URI="init.mp4"
 #EXTINF:4.0,
 seg1.m4s
 #EXT-X-ENDLIST
-`, "", "", false},
+`, Variant{}, "", false},
 	}
 	for _, tt := range tests {
 		video, audio, ok := selectRenditions(tt.playlist)
 		if video != tt.video || audio != tt.audio || ok != tt.ok {
-			t.Errorf("%s: got (%q, %q, %v), want (%q, %q, %v)", tt.name, video, audio, ok, tt.video, tt.audio, tt.ok)
+			t.Errorf("%s: got (%+v, %q, %v), want (%+v, %q, %v)", tt.name, video, audio, ok, tt.video, tt.audio, tt.ok)
 		}
 	}
 }
@@ -81,7 +86,7 @@ func TestParseAttrs(t *testing.T) {
 	}
 }
 
-func TestPickInputs(t *testing.T) {
+func TestLoad(t *testing.T) {
 	var gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotUA = r.UserAgent()
@@ -92,6 +97,8 @@ func TestPickInputs(t *testing.T) {
 			io.WriteString(w, tvpMaster)
 		case "/media.m3u8":
 			io.WriteString(w, "#EXTM3U\n#EXTINF:4.0,\nseg1.ts\n")
+		case "/refused.m3u8":
+			http.Error(w, "forbidden", http.StatusForbidden)
 		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
 			http.NotFound(w, r)
@@ -101,29 +108,35 @@ func TestPickInputs(t *testing.T) {
 	ctx := context.Background()
 	h := http.Header{"User-Agent": {"vodarr-test"}}
 
-	got, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/token/abc/video.ism/video-fmp4.m3u8", Header: h})
-	if err != nil {
-		t.Fatal(err)
+	m, ok, err := Load(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/token/abc/video.ism/video-fmp4.m3u8", Header: h})
+	if err != nil || !ok {
+		t.Fatalf("master: ok = %v, err = %v", ok, err)
 	}
-	want := []string{
-		srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f7-v1.m3u8",
-		srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f1-a1.m3u8",
+	want := Master{
+		Video: Variant{
+			URI:   srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f7-v1.m3u8",
+			Width: 1920, Height: 1080, Bandwidth: 5118260, Codecs: "avc1.640029,mp4a.40.2", audio: "audio0",
+		},
+		Audio: srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f1-a1.m3u8",
 	}
-	if !reflect.DeepEqual(got, want) || gotUA != "vodarr-test" {
-		t.Errorf("master: got %v (UA %q), want %v", got, gotUA, want)
+	if m != want || gotUA != "vodarr-test" {
+		t.Errorf("master: got %+v (UA %q), want %+v", m, gotUA, want)
 	}
 
 	// After a redirect, renditions resolve against the final URL.
-	got, err = pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/redirect/video-fmp4.m3u8"})
-	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Errorf("redirected master: got %v, %v; want %v", got, err, want)
+	m, ok, err = Load(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/redirect/video-fmp4.m3u8"})
+	if err != nil || !ok || m != want {
+		t.Errorf("redirected master: got %+v, %v, %v; want %+v", m, ok, err, want)
 	}
 
-	// Other URLs pass through; non-HLS ones aren't fetched.
+	// Media playlists aren't masters; non-HLS URLs aren't fetched.
 	for _, u := range []string{srv.URL + "/media.m3u8", srv.URL + "/video.mpd", srv.URL + "/film.mp4"} {
-		got, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: u})
-		if err != nil || len(got) != 1 || got[0] != u {
-			t.Errorf("%s: got %v, %v", u, got, err)
+		if _, ok, err := Load(ctx, srv.Client(), provider.Stream{URL: u}); ok || err != nil {
+			t.Errorf("%s: ok = %v, err = %v", u, ok, err)
 		}
+	}
+
+	if _, _, err := Load(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/refused.m3u8"}); err == nil || err.Error() != "fetching playlist: HTTP 403" {
+		t.Errorf("refused: err = %v", err)
 	}
 }

@@ -14,8 +14,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/combor/vodarr/internal/hls"
 	"github.com/combor/vodarr/internal/provider"
 )
+
+var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
 // FFmpeg is an Engine that has ffmpeg fetch the stream and remux it into MP4.
 type FFmpeg struct {
@@ -24,6 +27,24 @@ type FFmpeg struct {
 	// StallTimeout kills ffmpeg when no data arrives for this long; 5 minutes
 	// if zero, to cover the +faststart pass, which reports no progress.
 	StallTimeout time.Duration
+}
+
+// pickInputs returns the URLs ffmpeg should read. For an HLS master playlist
+// it picks the best video variant and its audio rendition, since ffmpeg would
+// otherwise probe every variant first. Other URLs are passed through.
+func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]string, error) {
+	m, ok, err := hls.Load(ctx, client, s)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return []string{s.URL}, nil
+	}
+	inputs := []string{m.Video.URI}
+	if m.Audio != "" {
+		inputs = append(inputs, m.Audio)
+	}
+	return inputs, nil
 }
 
 // ffmpeg logs these when it drops data but still exits 0.
