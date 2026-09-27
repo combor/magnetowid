@@ -74,6 +74,9 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.WaitDelay = 5 * time.Second
+	// A terminal's Ctrl+C must reach only vodarr, which stops ffmpeg and
+	// requeues the job. An ffmpeg that exited first would use up a retry.
+	cmd.SysProcAttr = ownProcessGroup()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
