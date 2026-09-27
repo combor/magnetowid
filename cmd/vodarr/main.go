@@ -19,6 +19,7 @@ import (
 
 	"github.com/combor/vodarr/internal/downloader"
 	"github.com/combor/vodarr/internal/newznab"
+	"github.com/combor/vodarr/internal/probe"
 	"github.com/combor/vodarr/internal/provider"
 	"github.com/combor/vodarr/internal/provider/tvp"
 	"github.com/combor/vodarr/internal/sabnzbd"
@@ -77,7 +78,8 @@ func run(log *slog.Logger) error {
 	}
 	defer queue.Close()
 	mux := http.NewServeMux()
-	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Log: log})
+	prober := &probe.Prober{Client: httpClient}
+	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Probe: prober, Log: log})
 	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

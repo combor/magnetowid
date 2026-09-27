@@ -174,9 +174,9 @@ Include the steps to reproduce and any relevant error message, with API keys rem
   - Sonarr only sends its own series title, which is often English. A series is
     found only if that title matches the site's, unless the site can also be
     searched by TVDB ID. The notes for each site say whether it can.
-- **What can't be downloaded:** DRM-protected and paid content, and titles not available where vodarr runs. These jobs fail with the site's reason. Getting network access to region-restricted titles is up to the operator.
+- **What can't be downloaded:** DRM-protected and paid content, and titles not available where vodarr runs. vodarr leaves them out of search results, and logs how many it left out with the site's reason for the first. A job can still fail if a title stops being available between the search and the download. Getting network access to region-restricted titles is up to the operator.
 - **Release details:**
-  - Releases are always named `1080p`; ffmpeg downloads the best quality available.
+  - A release's name gives the resolution and codecs of the best stream the site offers, which is the one vodarr downloads. vodarr reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
   - Only a single audio track is kept, and no subtitles.
 - **Restarts:** the queue and history are saved in `.vodarr-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one vodarr can use it at a time.
 

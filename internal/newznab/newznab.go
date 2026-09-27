@@ -2,8 +2,10 @@
 package newznab
 
 import (
+	"cmp"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -11,17 +13,33 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/combor/vodarr/internal/nzb"
+	"github.com/combor/vodarr/internal/probe"
 	"github.com/combor/vodarr/internal/provider"
 )
 
-// bytesPerSecond estimates release size (4 Mbit/s).
+// bytesPerSecond estimates release size (4 Mbit/s) when the stream gives no
+// bandwidth.
 const bytesPerSecond = 4_000_000 / 8
 
 // maxResults is the page size advertised in caps.
 const maxResults = 100
+
+// probeWorkers bounds the streams one search probes at once.
+const probeWorkers = 4
+
+// Sonarr and Radarr give up on a request after 100 s. So probing stops after
+// probeBudget, and in any case answerWithin after the request came, leaving
+// out the streams not read by then rather than lose the whole result. A
+// stalled stream fails sooner, after the prober's 20 s, which leaves time to
+// probe another in its place.
+const (
+	probeBudget  = 45 * time.Second
+	answerWithin = 90 * time.Second
+)
 
 const (
 	catMovies   = 2000
@@ -34,7 +52,11 @@ const (
 type Handler struct {
 	Providers *provider.Registry
 	APIKey    string
+	Probe     *probe.Prober // reads each release's quality
 	Log       *slog.Logger
+
+	// For tests; 0 is the constant of the same name.
+	probeBudget, answerWithin time.Duration
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -64,6 +86,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Provider, t string) {
+	start := time.Now()
 	q := r.URL.Query()
 	movie := t == "movie" || (t == "search" && hasMovieCategory(q.Get("cat")))
 	text := strings.TrimSpace(q.Get("q"))
@@ -108,16 +131,97 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 		writeError(w, 900, "Search failed: "+err.Error())
 		return
 	}
+	// Sonarr/Radarr ask for the next offset whenever a page is full. Items
+	// left out while probing mustn't shorten a full page, so enough are
+	// probed to fill it, and no more.
+	off, lim := pageBounds(q.Get("offset"), q.Get("limit"))
+	want := off + lim
+	if off < 0 || off >= len(found) {
+		want = 0 // the page is empty whatever is left out
+	}
+	deadline := time.Now().Add(cmp.Or(h.probeBudget, probeBudget))
+	if answerBy := start.Add(cmp.Or(h.answerWithin, answerWithin)); answerBy.Before(deadline) {
+		deadline = answerBy
+	}
+	probeCtx, cancel := context.WithDeadline(r.Context(), deadline)
+	defer cancel()
+	releases, unavailable, unreadable := h.probeUntil(probeCtx, p, found, want)
+	if probeCtx.Err() != nil && r.Context().Err() == nil {
+		h.Log.Warn("ran out of time reading release qualities; leaving the rest out", "provider", p.Name(),
+			"took", time.Since(start).Round(time.Second), "read", len(releases))
+	}
+	releases = page(releases, off, lim)
 	h.Log.Info("search", "provider", p.Name(), "kind", query.Kind, "title", query.Title, "tvdbid", tvdbID,
-		"year", query.Year, "season", query.Season, "episode", query.Episode, "results", len(found))
+		"year", query.Year, "season", query.Season, "episode", query.Episode, "offset", off, "results", len(releases),
+		"unavailable", unavailable, "unreadable", unreadable)
 
-	// Sonarr/Radarr ask for the next offset whenever a page is full.
-	found = page(found, q.Get("offset"), q.Get("limit"))
-	items := make([]item, 0, len(found))
-	for _, it := range found {
-		items = append(items, h.release(r, p, query, it))
+	items := make([]item, 0, len(releases))
+	for _, rel := range releases {
+		items = append(items, h.release(r, p, query, rel.Item, rel.info))
 	}
 	writeXML(w, h.feed(p, items))
+}
+
+// probed is a search hit with the quality of its stream.
+type probed struct {
+	provider.Item
+	info probe.Info
+}
+
+// probeUntil returns, in order, the first want items whose quality could be
+// read, probing no further. It leaves out and counts the ones that can't be
+// downloaded (DRM, paid, region-blocked) and the ones whose quality can't be
+// read, rather than offer a release under a quality it may not have.
+func (h *Handler) probeUntil(ctx context.Context, p provider.Provider, items []provider.Item, want int) (out []probed, unavailable, unreadable int) {
+	var firstUnavailable error
+	for next := 0; next < len(items) && len(out) < want && ctx.Err() == nil; {
+		// Just enough for the page if all of them can be read.
+		batch := items[next:min(next+want-len(out), len(items))]
+		next += len(batch)
+		infos, errs := h.probeBatch(ctx, p, batch)
+		for i, it := range batch {
+			switch err := errs[i]; {
+			case err == nil:
+				out = append(out, probed{Item: it, info: infos[i]})
+			case errors.Is(err, provider.ErrUnavailable):
+				if unavailable == 0 {
+					firstUnavailable = err
+				}
+				unavailable++
+				h.Log.Debug("release unavailable", "provider", p.Name(), "id", it.ID, "title", it.Title, "err", err)
+			default:
+				// The first one is a warning: the site or network may be failing.
+				if unreadable == 0 && ctx.Err() == nil {
+					h.Log.Warn("can't read a release's quality; leaving it out", "provider", p.Name(), "id", it.ID, "title", it.Title, "err", err)
+				} else {
+					h.Log.Debug("can't read a release's quality", "provider", p.Name(), "id", it.ID, "title", it.Title, "err", err)
+				}
+				unreadable++
+			}
+		}
+	}
+	if unavailable > 0 {
+		h.Log.Info("left out releases that can't be downloaded", "provider", p.Name(), "count", unavailable,
+			"first_reason", firstUnavailable)
+	}
+	return out, unavailable, unreadable
+}
+
+// probeBatch probes items, probeWorkers at a time.
+func (h *Handler) probeBatch(ctx context.Context, p provider.Provider, items []provider.Item) ([]probe.Info, []error) {
+	infos := make([]probe.Info, len(items))
+	errs := make([]error, len(items))
+	sem := make(chan struct{}, probeWorkers)
+	var wg sync.WaitGroup
+	for i, it := range items {
+		sem <- struct{}{}
+		wg.Go(func() {
+			defer func() { <-sem }()
+			infos[i], errs[i] = h.Probe.Probe(ctx, p, it.ID)
+		})
+	}
+	wg.Wait()
+	return infos, errs
 }
 
 // searchTVDB serves Sonarr's search by TVDB ID alone. It finds nothing if
@@ -153,16 +257,19 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, p provider.Provide
 }
 
 // release turns a provider item into a Newznab item.
-func (h *Handler) release(r *http.Request, p provider.Provider, q provider.Query, it provider.Item) item {
+func (h *Handler) release(r *http.Request, p provider.Provider, q provider.Query, it provider.Item, info probe.Info) item {
 	secs := int(it.Duration / time.Second)
 	link := h.nzbLink(r, p, it.ID, secs)
 	size := int64(secs) * bytesPerSecond
+	if info.Bandwidth > 0 {
+		size = int64(secs) * info.Bandwidth / 8
+	}
 	cat := catTVHD
 	if it.Kind == provider.Movie {
 		cat = catMoviesHD
 	}
 	return item{
-		Title:     ReleaseTitle(p.Name(), q, it),
+		Title:     ReleaseTitle(p.Name(), q, it, info),
 		GUID:      guid{IsPermaLink: false, Value: p.Name() + ":" + it.ID},
 		Link:      link,
 		PubDate:   pubDate(it.Published),
@@ -197,10 +304,10 @@ func (h *Handler) placeholder(r *http.Request, p provider.Provider, movie bool) 
 
 // ReleaseTitle builds a release name from the *arr's own query title and
 // year, so the release matches by title: Sonarr/Radarr won't auto-import a
-// release matched only by ID.
-func ReleaseTitle(providerName string, q provider.Query, it provider.Item) string {
+// release matched only by ID. The quality is the stream's, so the one they
+// grab by is the one they record on import.
+func ReleaseTitle(providerName string, q provider.Query, it provider.Item, info probe.Info) string {
 	title := strings.Join(strings.Fields(q.Title), ".")
-	group := strings.ToUpper(providerName)
 	if it.Kind == provider.Movie {
 		year := q.Year
 		if year == 0 {
@@ -209,9 +316,16 @@ func ReleaseTitle(providerName string, q provider.Query, it provider.Item) strin
 		if year > 0 {
 			title += "." + strconv.Itoa(year)
 		}
-		return title + ".1080p.WEB-DL.AAC.H.264-" + group
+	} else {
+		title += fmt.Sprintf(".S%02dE%02d", it.Season, it.Episode)
 	}
-	return fmt.Sprintf("%s.S%02dE%02d.1080p.WEB-DL.AAC.H.264-%s", title, it.Season, it.Episode, group)
+	parts := []string{title, info.Resolution(), "WEB-DL"}
+	for _, codec := range []string{info.AudioCodec(), info.VideoCodec()} {
+		if codec != "" {
+			parts = append(parts, codec)
+		}
+	}
+	return strings.Join(parts, ".") + "-" + strings.ToUpper(providerName)
 }
 
 func (h *Handler) nzbLink(r *http.Request, p provider.Provider, id string, secs int) string {
@@ -242,13 +356,18 @@ func firstValue(v string) string {
 	return strings.TrimSpace(first)
 }
 
-// page applies Newznab offset and limit, capping limit at maxResults.
-func page(items []provider.Item, offset, limit string) []provider.Item {
-	off, _ := strconv.Atoi(offset)
+// pageBounds parses Newznab offset and limit, capping limit at maxResults.
+func pageBounds(offset, limit string) (off, lim int) {
+	off, _ = strconv.Atoi(offset)
 	lim, err := strconv.Atoi(limit)
 	if err != nil || lim <= 0 || lim > maxResults {
 		lim = maxResults
 	}
+	return off, lim
+}
+
+// page returns the items from off, at most lim of them.
+func page[T any](items []T, off, lim int) []T {
 	if off < 0 || off >= len(items) {
 		return nil
 	}

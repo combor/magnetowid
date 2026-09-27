@@ -11,85 +11,17 @@ import (
 	"github.com/combor/vodarr/internal/provider"
 )
 
-// TVP's master playlist (2026-09-26), variants reordered to test sorting.
-const tvpMaster = `#EXTM3U
-
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",LANGUAGE="pl",NAME="Polski",AUTOSELECT=YES,DEFAULT=YES,CHANNELS="2",URI="nv-hlsfmp4-index-vod4-f1-a1.m3u8"
-
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=3598429,RESOLUTION=1280x720,FRAME-RATE=25.000,CODECS="avc1.64001f,mp4a.40.2",AUDIO="audio0"
-nv-hlsfmp4-index-vod4-f6-v1.m3u8
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=5118260,RESOLUTION=1920x1080,FRAME-RATE=25.000,CODECS="avc1.640029,mp4a.40.2",AUDIO="audio0"
-nv-hlsfmp4-index-vod4-f7-v1.m3u8
-#EXT-X-STREAM-INF:PROGRAM-ID=1,BANDWIDTH=527008,RESOLUTION=400x224,FRAME-RATE=25.000,CODECS="avc1.42c01f,mp4a.40.2",AUDIO="audio0"
-nv-hlsfmp4-index-vod4-f1-v1.m3u8
-`
-
-func TestSelectRenditions(t *testing.T) {
-	tests := []struct {
-		name, playlist, video, audio string
-		ok                           bool
-	}{
-		{"tvp", tvpMaster, "nv-hlsfmp4-index-vod4-f7-v1.m3u8", "nv-hlsfmp4-index-vod4-f1-a1.m3u8", true},
-		{"muxed audio", `#EXTM3U
-#EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
-low.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720
-high.m3u8
-`, "high.m3u8", "", true},
-		{"audio-only variant and no resolutions", `#EXTM3U
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="en.m3u8"
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",AUTOSELECT=YES,URI="pl.m3u8"
-#EXT-X-STREAM-INF:BANDWIDTH=900000,CODECS="mp4a.40.2",AUDIO="a"
-audio-only.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=300000,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="a"
-video.m3u8
-`, "video.m3u8", "pl.m3u8", true},
-		{"default audio muxed into the variant", `#EXTM3U
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",DEFAULT=YES,AUTOSELECT=YES
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="en.m3u8"
-#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="a"
-video.m3u8
-`, "video.m3u8", "", true},
-		{"no codecs means video, bandwidth breaks ties", `#EXTM3U
-#EXT-X-STREAM-INF:BANDWIDTH=1
-a.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=2
-b.m3u8
-`, "b.m3u8", "", true},
-		{"media playlist", `#EXTM3U
-#EXT-X-TARGETDURATION:4
-#EXT-X-MAP:URI="init.mp4"
-#EXTINF:4.0,
-seg1.m4s
-#EXT-X-ENDLIST
-`, "", "", false},
-	}
-	for _, tt := range tests {
-		video, audio, ok := selectRenditions(tt.playlist)
-		if video != tt.video || audio != tt.audio || ok != tt.ok {
-			t.Errorf("%s: got (%q, %q, %v), want (%q, %q, %v)", tt.name, video, audio, ok, tt.video, tt.audio, tt.ok)
-		}
-	}
-}
-
-func TestParseAttrs(t *testing.T) {
-	got := parseAttrs(`PROGRAM-ID=1,BANDWIDTH=527008,CODECS="avc1.42c01f,mp4a.40.2",AUDIO="audio0",FRAME-RATE=25.000`)
-	want := map[string]string{"PROGRAM-ID": "1", "BANDWIDTH": "527008", "CODECS": "avc1.42c01f,mp4a.40.2",
-		"AUDIO": "audio0", "FRAME-RATE": "25.000"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("parseAttrs = %v", got)
-	}
-}
-
 func TestPickInputs(t *testing.T) {
-	var gotUA string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotUA = r.UserAgent()
 		switch r.URL.Path {
-		case "/redirect/video-fmp4.m3u8":
-			http.Redirect(w, r, "/token/abc/video.ism/video-fmp4.m3u8", http.StatusFound)
-		case "/token/abc/video.ism/video-fmp4.m3u8":
-			io.WriteString(w, tvpMaster)
+		case "/split.m3u8":
+			io.WriteString(w, `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",DEFAULT=YES,URI="audio.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=5118260,RESOLUTION=1920x1080,CODECS="avc1.640029,mp4a.40.2",AUDIO="a"
+video.m3u8
+`)
+		case "/muxed.m3u8":
+			io.WriteString(w, "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720\nhigh.m3u8\n")
 		case "/media.m3u8":
 			io.WriteString(w, "#EXTM3U\n#EXTINF:4.0,\nseg1.ts\n")
 		default:
@@ -99,31 +31,21 @@ func TestPickInputs(t *testing.T) {
 	}))
 	defer srv.Close()
 	ctx := context.Background()
-	h := http.Header{"User-Agent": {"vodarr-test"}}
 
-	got, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/token/abc/video.ism/video-fmp4.m3u8", Header: h})
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []string{
-		srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f7-v1.m3u8",
-		srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f1-a1.m3u8",
-	}
-	if !reflect.DeepEqual(got, want) || gotUA != "vodarr-test" {
-		t.Errorf("master: got %v (UA %q), want %v", got, gotUA, want)
-	}
-
-	// After a redirect, renditions resolve against the final URL.
-	got, err = pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/redirect/video-fmp4.m3u8"})
-	if err != nil || !reflect.DeepEqual(got, want) {
-		t.Errorf("redirected master: got %v, %v; want %v", got, err, want)
-	}
-
-	// Other URLs pass through; non-HLS ones aren't fetched.
-	for _, u := range []string{srv.URL + "/media.m3u8", srv.URL + "/video.mpd", srv.URL + "/film.mp4"} {
-		got, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: u})
-		if err != nil || len(got) != 1 || got[0] != u {
-			t.Errorf("%s: got %v, %v", u, got, err)
+	for _, tt := range []struct {
+		path string
+		want []string
+	}{
+		// ffmpeg gets the best variant and, if separate, its audio.
+		{"/split.m3u8", []string{srv.URL + "/video.m3u8", srv.URL + "/audio.m3u8"}},
+		{"/muxed.m3u8", []string{srv.URL + "/high.m3u8"}},
+		// Anything else is passed through.
+		{"/media.m3u8", []string{srv.URL + "/media.m3u8"}},
+		{"/film.mp4", []string{srv.URL + "/film.mp4"}},
+	} {
+		got, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + tt.path})
+		if err != nil || !reflect.DeepEqual(got, tt.want) {
+			t.Errorf("%s: got %v, %v; want %v", tt.path, got, err, tt.want)
 		}
 	}
 }
