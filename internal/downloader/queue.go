@@ -73,6 +73,7 @@ type Job struct {
 	Error    string    `json:"error,omitzero"`
 	Attempts int       `json:"attempts,omitzero"`
 	RetryAt  time.Time `json:"retry_at,omitzero"`
+	Priority int       `json:"priority,omitzero"` // -1 low, 0 normal, 1 high, 2 force
 }
 
 // historyRetention is how long finished jobs are kept. Sonarr/Radarr handle
@@ -141,8 +142,9 @@ func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logg
 // Dir returns the download root.
 func (q *Queue) Dir() string { return q.dir }
 
-// Add queues a job and returns its SABnzbd-style ID.
-func (q *Queue) Add(name, nzbName, category string, ref nzb.Ref) string {
+// Add queues a job and returns its SABnzbd-style ID. Higher priority jobs
+// start first.
+func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) string {
 	job := &Job{
 		ID:       "SABnzbd_nzo_" + randomHex(8),
 		Name:     SanitizeName(name),
@@ -151,13 +153,15 @@ func (q *Queue) Add(name, nzbName, category string, ref nzb.Ref) string {
 		Ref:      ref,
 		Status:   StatusQueued,
 		Added:    time.Now(),
+		Priority: priority,
 	}
 	q.mu.Lock()
 	q.jobs[job.ID] = job
 	q.order = append(q.order, job.ID)
 	q.put(job)
 	q.mu.Unlock()
-	q.log.Info("job queued", "id", job.ID, "name", job.Name, "category", category, "provider", ref.Provider, "ref", ref.ID)
+	q.log.Info("job queued", "id", job.ID, "name", job.Name, "category", category, "priority", priority,
+		"provider", ref.Provider, "ref", ref.ID)
 	select {
 	case q.wake <- struct{}{}:
 	default:
@@ -238,12 +242,14 @@ func (q *Queue) Run(ctx context.Context) {
 	}
 }
 
-// next starts the oldest ready job. If none is ready, wait is the time until
-// the earliest retry or end of a provider pause.
+// next starts the ready job with the highest priority, oldest first. If none
+// is ready, wait is the time until the earliest retry or end of a provider
+// pause.
 func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	now := time.Now()
+	var best *Job
 	for _, id := range q.order {
 		job := q.jobs[id]
 		if job.Status != StatusQueued {
@@ -259,12 +265,17 @@ func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 			}
 			continue
 		}
-		job.Status = StatusDownloading
-		job.Started = now
-		job.Attempts++
-		return id, 0, true
+		if best == nil || job.Priority > best.Priority {
+			best = job
+		}
 	}
-	return "", wait, false
+	if best == nil {
+		return "", wait, false
+	}
+	best.Status = StatusDownloading
+	best.Started = now
+	best.Attempts++
+	return best.ID, 0, true
 }
 
 func (q *Queue) process(parent context.Context, id string) {

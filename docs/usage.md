@@ -79,6 +79,7 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - Host and port: vodarr's host and port.
    - API key: the one vodarr was started with.
    - Category: `tv` (Sonarr) or `movies` (Radarr).
+   - Priority settings (optional): vodarr downloads one job at a time and starts higher-priority jobs first. Paused counts as Low.
 2. **Indexer:** Settings → Indexers → **Newznab**, one per site.
    - Name: e.g. "TVP VOD".
    - URL: `http://<host>:8484/tvp`, API path `/api`, the same API key.

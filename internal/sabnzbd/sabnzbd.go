@@ -95,8 +95,21 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = strings.TrimSuffix(header.Filename, ".nzb")
 	}
-	id := h.Queue.Add(name, header.Filename, r.FormValue("cat"), ref)
+	id := h.Queue.Add(name, header.Filename, r.FormValue("cat"), parsePriority(r.FormValue("priority")), ref)
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{id}})
+}
+
+// priorityNames are the SABnzbd priorities vodarr supports, from -1.
+var priorityNames = []string{"Low", "Normal", "High", "Force"}
+
+// parsePriority reads addfile's priority. The *arr default (-100) counts as
+// Normal, and Paused (-2), which vodarr doesn't support, as Low.
+func parsePriority(s string) int {
+	p, err := strconv.Atoi(s)
+	if err != nil || p == -100 {
+		return 0
+	}
+	return min(max(p, -1), 2)
 }
 
 func formFile(r *http.Request, fields ...string) (multipart.File, *multipart.FileHeader, error) {
@@ -184,7 +197,7 @@ func (h *Handler) queue(cat string) map[string]any {
 			Filename:   j.Name,
 			Category:   j.Category,
 			Status:     string(j.Status),
-			Priority:   "Normal",
+			Priority:   priorityNames[j.Priority+1],
 			MB:         megabytes(total),
 			MBLeft:     megabytes(int64(float64(total) * (1 - j.Fraction))),
 			Percentage: strconv.Itoa(int(j.Fraction * 100)),

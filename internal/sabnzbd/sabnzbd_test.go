@@ -73,8 +73,13 @@ func call(t *testing.T, srv *httptest.Server, params url.Values) map[string]any 
 	return out
 }
 
-// addFile uploads an NZB the way Sonarr/Radarr do.
+// addFile uploads an NZB the way Sonarr/Radarr do, with the default priority.
 func addFile(t *testing.T, srv *httptest.Server, filename string, body []byte) map[string]any {
+	t.Helper()
+	return addFileWithPriority(t, srv, filename, body, "-100")
+}
+
+func addFileWithPriority(t *testing.T, srv *httptest.Server, filename string, body []byte, priority string) map[string]any {
 	t.Helper()
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -84,7 +89,7 @@ func addFile(t *testing.T, srv *httptest.Server, filename string, body []byte) m
 	}
 	fw.Write(body)
 	mw.Close()
-	u := srv.URL + "/api?" + url.Values{"mode": {"addfile"}, "cat": {"tv"}, "priority": {"-100"},
+	u := srv.URL + "/api?" + url.Values{"mode": {"addfile"}, "cat": {"tv"}, "priority": {priority},
 		"apikey": {"secret"}, "output": {"json"}}.Encode()
 	resp, err := http.Post(u, mw.FormDataContentType(), &buf)
 	if err != nil {
@@ -163,12 +168,31 @@ func TestAddFileQueuesJob(t *testing.T) {
 	}
 	s := slots[0].(map[string]any)
 	if s["nzo_id"] != ids[0] || s["filename"] != "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP" ||
-		s["cat"] != "tv" || s["status"] != "Queued" || s["timeleft"] != "0:00:00" || s["mb"] != "28.61" {
+		s["cat"] != "tv" || s["status"] != "Queued" || s["timeleft"] != "0:00:00" || s["mb"] != "28.61" ||
+		s["priority"] != "Normal" {
 		t.Errorf("slot = %v", s)
 	}
 	other := call(t, srv, url.Values{"mode": {"queue"}, "category": {"movies"}})["queue"].(map[string]any)
 	if len(other["slots"].([]any)) != 0 {
 		t.Errorf("category filter: %v", other)
+	}
+}
+
+func TestAddFilePriority(t *testing.T) {
+	srv, q := newServer(t, false)
+	addFileWithPriority(t, srv, "A.nzb", vodarrNZB(t), "1")
+	slots := call(t, srv, url.Values{"mode": {"queue"}})["queue"].(map[string]any)["slots"].([]any)
+	if len(slots) != 1 || slots[0].(map[string]any)["priority"] != "High" || q.Jobs()[0].Priority != 1 {
+		t.Fatalf("slots = %v", slots)
+	}
+}
+
+func TestParsePriority(t *testing.T) {
+	tests := map[string]int{"-100": 0, "": 0, "x": 0, "-2": -1, "-1": -1, "0": 0, "1": 1, "2": 2, "3": 2}
+	for in, want := range tests {
+		if got := parsePriority(in); got != want {
+			t.Errorf("parsePriority(%q) = %d, want %d", in, got, want)
+		}
 	}
 }
 

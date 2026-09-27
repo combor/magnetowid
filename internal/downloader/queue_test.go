@@ -84,6 +84,27 @@ func (e *blockingEngine) Download(ctx context.Context, s provider.Stream, _ stri
 	return ctx.Err()
 }
 
+// orderEngine records the streams it fetches and holds the first until
+// release is closed.
+type orderEngine struct {
+	mu      sync.Mutex
+	urls    []string
+	started chan struct{}
+	release chan struct{}
+}
+
+func (e *orderEngine) Download(_ context.Context, s provider.Stream, out string, _ func(time.Duration, int64)) error {
+	e.mu.Lock()
+	e.urls = append(e.urls, s.URL)
+	first := len(e.urls) == 1
+	e.mu.Unlock()
+	if first {
+		close(e.started)
+		<-e.release
+	}
+	return os.WriteFile(out, []byte("media"), 0o644)
+}
+
 func startQueueWithDelay(t *testing.T, p *fakeProvider, e Engine, retryDelay time.Duration) *Queue {
 	t.Helper()
 	q := newQueue(t, t.TempDir(), p, e)
@@ -137,7 +158,7 @@ func waitJob(t *testing.T, q *Queue, id string, cond func(Job) bool) Job {
 
 func TestJobCompletes(t *testing.T) {
 	q := startQueue(t, &fakeProvider{}, &fakeEngine{})
-	id := q.Add("Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP", "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP.nzb", "tv",
+	id := q.Add("Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP", "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP.nzb", "tv", 0,
 		nzb.Ref{Provider: "fake", ID: "381046", Duration: 60})
 	j := waitFinished(t, q, id)
 	if j.Status != StatusCompleted {
@@ -161,8 +182,8 @@ func TestJobCompletes(t *testing.T) {
 func TestSameNameGetsSuffix(t *testing.T) {
 	q := startQueue(t, &fakeProvider{}, &fakeEngine{})
 	ref := nzb.Ref{Provider: "fake", ID: "1"}
-	first := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", ref))
-	second := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", ref))
+	first := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", 0, ref))
+	second := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", 0, ref))
 	if first.Storage == second.Storage {
 		t.Fatalf("both jobs share %q", first.Storage)
 	}
@@ -191,7 +212,7 @@ func TestBackoffSchedule(t *testing.T) {
 func TestRetriesWithFreshResolve(t *testing.T) {
 	p := &fakeProvider{}
 	q := startQueue(t, p, &fakeEngine{fail: 3})
-	j := waitFinished(t, q, q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "1"}))
+	j := waitFinished(t, q, q.Add("a", "a.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "1"}))
 	if j.Status != StatusCompleted || j.Attempts != 4 || p.resolves != 4 || j.Error != "" {
 		t.Fatalf("status = %s, attempts = %d, resolves = %d, error = %q", j.Status, j.Attempts, p.resolves, j.Error)
 	}
@@ -200,7 +221,7 @@ func TestRetriesWithFreshResolve(t *testing.T) {
 func TestGivesUpAfterFiveRetries(t *testing.T) {
 	p := &fakeProvider{}
 	q := startQueue(t, p, &fakeEngine{fail: 100})
-	j := waitFinished(t, q, q.Add("b", "b.nzb", "tv", nzb.Ref{Provider: "fake", ID: "1"}))
+	j := waitFinished(t, q, q.Add("b", "b.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "1"}))
 	if j.Status != StatusFailed || j.Attempts != 1+maxRetries || p.resolves != 1+maxRetries || j.Error != "boom" {
 		t.Fatalf("status = %s, attempts = %d, resolves = %d, error = %q", j.Status, j.Attempts, p.resolves, j.Error)
 	}
@@ -209,8 +230,8 @@ func TestGivesUpAfterFiveRetries(t *testing.T) {
 // A job waiting to retry must not hold up the rest of the queue.
 func TestRetryWaitDoesNotBlockQueue(t *testing.T) {
 	q := startQueueWithDelay(t, &fakeProvider{}, &fakeEngine{failURL: "/bad/"}, time.Hour)
-	bad := q.Add("bad", "bad.nzb", "tv", nzb.Ref{Provider: "fake", ID: "bad"})
-	good := waitFinished(t, q, q.Add("good", "good.nzb", "tv", nzb.Ref{Provider: "fake", ID: "good"}))
+	bad := q.Add("bad", "bad.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "bad"})
+	good := waitFinished(t, q, q.Add("good", "good.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "good"}))
 	if good.Status != StatusCompleted {
 		t.Fatalf("good job: %s %q", good.Status, good.Error)
 	}
@@ -225,7 +246,7 @@ func TestRetryWaitDoesNotBlockQueue(t *testing.T) {
 func TestOutageUsesNoRetries(t *testing.T) {
 	p := &fakeProvider{offline: maxRetries + 3}
 	q := startQueue(t, p, &fakeEngine{})
-	j := waitFinished(t, q, q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "1"}))
+	j := waitFinished(t, q, q.Add("a", "a.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "1"}))
 	if j.Status != StatusCompleted || j.Attempts != 1 || p.resolves != maxRetries+4 || j.Error != "" {
 		t.Fatalf("status = %s, attempts = %d, resolves = %d, error = %q", j.Status, j.Attempts, p.resolves, j.Error)
 	}
@@ -235,8 +256,8 @@ func TestOutageUsesNoRetries(t *testing.T) {
 func TestOutagePausesProvider(t *testing.T) {
 	p := &fakeProvider{offline: 1}
 	q := startQueueWithDelay(t, p, &fakeEngine{}, time.Hour)
-	a := q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
-	b := q.Add("b", "b.nzb", "tv", nzb.Ref{Provider: "fake", ID: "b"})
+	a := q.Add("a", "a.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	b := q.Add("b", "b.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "b"})
 	waitJob(t, q, a, func(j Job) bool { return j.Error != "" })
 	time.Sleep(50 * time.Millisecond)
 	for _, j := range q.Jobs() {
@@ -279,7 +300,7 @@ func (timeoutError) Temporary() bool { return true }
 func TestUnavailableIsNotRetried(t *testing.T) {
 	p := &fakeProvider{err: fmt.Errorf("%w: DRM", provider.ErrUnavailable)}
 	q := startQueue(t, p, &fakeEngine{})
-	j := waitFinished(t, q, q.Add("c", "c.nzb", "tv", nzb.Ref{Provider: "fake", ID: "1"}))
+	j := waitFinished(t, q, q.Add("c", "c.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "1"}))
 	if j.Status != StatusFailed || p.resolves != 1 || j.Error != "content unavailable: DRM" {
 		t.Fatalf("status = %s, resolves = %d, error = %q", j.Status, p.resolves, j.Error)
 	}
@@ -291,9 +312,9 @@ func TestShutdownRequeues(t *testing.T) {
 	e := &blockingEngine{started: make(chan string, 1)}
 	q := newQueue(t, t.TempDir(), p, e)
 	stop := run(t, q)
-	q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
+	q.Add("a", "a.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
 	<-e.started
-	q.Add("b", "b.nzb", "tv", nzb.Ref{Provider: "fake", ID: "b"})
+	q.Add("b", "b.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "b"})
 	stop()
 	for _, j := range q.Jobs() {
 		if j.Status != StatusQueued || j.Attempts != 0 {
@@ -311,8 +332,8 @@ func TestJobsPersist(t *testing.T) {
 	q := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
 	stop := run(t, q)
 	ref := nzb.Ref{Provider: "fake", ID: "1"}
-	done := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", ref))
-	gone := waitFinished(t, q, q.Add("Other", "Other.nzb", "movies", ref))
+	done := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", 0, ref))
+	gone := waitFinished(t, q, q.Add("Other", "Other.nzb", "movies", 0, ref))
 	q.Delete(gone.ID, true)
 	stop()
 	q.Close()
@@ -332,7 +353,7 @@ func TestJobsPersist(t *testing.T) {
 		t.Fatalf("reloaded %+v, want %+v", j, done)
 	}
 	run(t, q)
-	again := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", ref))
+	again := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", 0, ref))
 	if want := done.Storage + ".1"; again.Storage != want {
 		t.Errorf("storage = %q, want %q", again.Storage, want)
 	}
@@ -344,7 +365,7 @@ func TestInterruptedJobResumes(t *testing.T) {
 	e := &blockingEngine{started: make(chan string, 1)}
 	q := newQueue(t, dir, &fakeProvider{}, e)
 	stop := run(t, q)
-	id := q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
+	id := q.Add("a", "a.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
 	<-e.started
 	stop()
 	q.Close()
@@ -365,7 +386,7 @@ func TestCrashedJobIsQueued(t *testing.T) {
 	e := &blockingEngine{started: make(chan string, 1)}
 	q := newQueue(t, dir, &fakeProvider{}, e)
 	run(t, q)
-	q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
+	q.Add("a", "a.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
 	<-e.started
 	q.Close() // as if vodarr died mid-download
 
@@ -407,7 +428,7 @@ func TestPruneOldHistory(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-historyRetention - time.Hour)
 	set := func(name string, status Status, finished time.Time) string {
-		id := q.Add(name, name+".nzb", "tv", nzb.Ref{Provider: "fake", ID: name})
+		id := q.Add(name, name+".nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: name})
 		q.mu.Lock()
 		defer q.mu.Unlock()
 		q.jobs[id].Status, q.jobs[id].Finished = status, finished
@@ -433,9 +454,38 @@ func TestPruneOldHistory(t *testing.T) {
 	}
 }
 
+// Higher priority jobs start first; equal ones in the order they were added.
+func TestPriorityOrder(t *testing.T) {
+	e := &orderEngine{started: make(chan struct{}), release: make(chan struct{})}
+	q := startQueue(t, &fakeProvider{}, e)
+	add := func(id string, priority int) string {
+		return q.Add(id, id+".nzb", "tv", priority, nzb.Ref{Provider: "fake", ID: id})
+	}
+	add("running", 0)
+	<-e.started
+	low := add("low", -1)
+	add("normal1", 0)
+	add("high", 1)
+	add("normal2", 0)
+	close(e.release)
+	waitFinished(t, q, low)
+
+	want := []string{"running", "high", "normal1", "normal2", "low"}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if len(e.urls) != len(want) {
+		t.Fatalf("fetched %v", e.urls)
+	}
+	for i, id := range want {
+		if !strings.Contains(e.urls[i], "/"+id+"/") {
+			t.Errorf("download %d = %s, want %s", i, e.urls[i], id)
+		}
+	}
+}
+
 func TestUnknownProviderFails(t *testing.T) {
 	q := startQueue(t, &fakeProvider{}, &fakeEngine{})
-	j := waitFinished(t, q, q.Add("d", "d.nzb", "tv", nzb.Ref{Provider: "gone", ID: "1"}))
+	j := waitFinished(t, q, q.Add("d", "d.nzb", "tv", 0, nzb.Ref{Provider: "gone", ID: "1"}))
 	if j.Status != StatusFailed {
 		t.Fatalf("status = %s", j.Status)
 	}
@@ -460,11 +510,11 @@ func TestSanitizeName(t *testing.T) {
 func TestNoReuseOfRecordedStorage(t *testing.T) {
 	q := startQueue(t, &fakeProvider{}, &fakeEngine{})
 	ref := nzb.Ref{Provider: "fake", ID: "1"}
-	first := waitFinished(t, q, q.Add("Show.S01E01", "Show.S01E01.nzb", "tv", ref))
+	first := waitFinished(t, q, q.Add("Show.S01E01", "Show.S01E01.nzb", "tv", 0, ref))
 	if err := os.RemoveAll(first.Storage); err != nil {
 		t.Fatal(err)
 	}
-	second := waitFinished(t, q, q.Add("Show.S01E01", "Show.S01E01.nzb", "tv", ref))
+	second := waitFinished(t, q, q.Add("Show.S01E01", "Show.S01E01.nzb", "tv", 0, ref))
 	if second.Storage == first.Storage {
 		t.Fatalf("second job reused %q", first.Storage)
 	}
