@@ -1,4 +1,6 @@
 /vodarr
 /dist/
+/.env
+/downloads/
 /docs/plan.md
 /docs/releasing.md

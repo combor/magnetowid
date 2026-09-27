@@ -12,14 +12,57 @@ Supported sites: **TVP VOD** (`tvp`).
 
 ## Install and run
 
+### Docker Compose
+
+Follow the [quick start](../README.md#quick-start) to download the
+[Compose configuration](../compose.yaml) and create `.env` from
+[the example](../.env.example). The image is `ghcr.io/combor/vodarr:latest`
+and includes ffmpeg.
+
+The Compose example reads these settings from `.env`:
+
+| Setting | Default | Description |
+|---|---|---|
+| `VODARR_API_KEY` | required | A long, random key shared by both APIs. |
+| `VODARR_DOWNLOAD_PATH` | `./downloads` | Host folder mounted at `/downloads` inside vodarr. |
+| `VODARR_UID` | `1000` | User ID for the container process. |
+| `VODARR_GID` | `1000` | Group ID for the container process. |
+
+Create the download folder before starting. On Linux, use the user and group IDs
+of the account that owns it; `id -u` and `id -g` show your current account's IDs.
+The container needs permission to create files and category folders there.
+Sonarr/Radarr also need access to the same files. See
+[Docker networking and shared downloads](#docker-networking-and-shared-downloads).
+
+Start vodarr with `docker compose up -d`. After changing `.env`, run the same
+command to apply the new settings. To update to the latest image:
+
+```sh
+docker compose pull
+docker compose up -d
+```
+
+### Build from source
+
 To build from source, use Go 1.27+ and install `ffmpeg` for runtime use.
 
 ```sh
+git clone https://github.com/combor/vodarr.git
+cd vodarr
 go build -o vodarr ./cmd/vodarr
-./vodarr -api-key <key> -download-dir /path/to/downloads
+./vodarr -api-key YOUR_API_KEY -download-dir ./downloads
 ```
 
-| Flag | Env | Default | |
+Replace `YOUR_API_KEY` with a long, random key and use it for both connections
+in Sonarr/Radarr.
+
+## Configuration
+
+Set these environment variables or pass the equivalent command-line flags.
+Flags take precedence. For Docker, add any extra variables to the `environment`
+section in `compose.yaml`.
+
+| Flag | Env | Default | Description |
 |---|---|---|---|
 | `-listen` | `VODARR_LISTEN` | `:8484` | listen address |
 | `-api-key` | `VODARR_API_KEY` | | required; used by both APIs |
@@ -43,6 +86,54 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - **Download Client:** set it to the client from step 1, so vodarr releases never go to a real Usenet client.
 
 The test buttons should pass for both. The indexer test uses a placeholder item that is never grabbed.
+
+## Docker networking and shared downloads
+
+Choose an address that Sonarr/Radarr can reach:
+
+- If an app runs directly on the same host as vodarr, use `localhost` and port `8484`.
+- If both containers share a Docker network, use the service name `vodarr` and port `8484`.
+- For apps on another machine or a different Docker network, use the Docker
+  host's reachable address and the published port `8484`.
+
+Inside a container, `localhost` refers to that container. Separate Compose
+projects do not share a network by default.
+
+Mount the same host download folder into Sonarr/Radarr. The supplied Compose
+file mounts it at `/downloads` in vodarr, so mounting it at `/downloads` in
+your apps gives them matching paths. vodarr creates `tv` and `movies`
+subfolders for the default categories.
+
+If an app sees the folder at a different path, add a **Remote Path Mapping**
+under **Settings → Download Clients**:
+
+| Field | Value |
+|---|---|
+| Host | The host entered for the `vodarr` download client. |
+| Remote Path | `/downloads` |
+| Local Path | The same shared folder as seen by Sonarr/Radarr, for example `/data/downloads`. |
+
+## Troubleshooting
+
+vodarr provides APIs and has no separate web interface. Search for titles and
+manage downloads in Sonarr/Radarr.
+
+| Problem | What to check |
+|---|---|
+| A connection test cannot reach vodarr | Check the container is running, port `8484` is reachable, and the host is correct for your [network setup](#docker-networking-and-shared-downloads). |
+| A connection reports an invalid API key | Use the same key for the indexer, download client and `VODARR_API_KEY`. Run `docker compose up -d` after changing `.env`. |
+| The container cannot find or write to the download folder | Create `VODARR_DOWNLOAD_PATH` before starting and check that `VODARR_UID` and `VODARR_GID` have write access. |
+| Downloads finish but are not imported | Mount the shared folder into Sonarr/Radarr, check file permissions and add a Remote Path Mapping if the paths differ. |
+| A vodarr release is sent to another download client | Set the indexer's **Download Client** to `vodarr`. |
+
+To inspect recent container messages:
+
+```sh
+docker compose logs --tail 100 vodarr
+```
+
+For bugs or feature requests, [open an issue](https://github.com/combor/vodarr/issues).
+Include the steps to reproduce and any relevant error message, with API keys removed.
 
 ## Limitations
 
