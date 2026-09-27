@@ -8,7 +8,7 @@ vodarr needs no changes to either app: it looks like two things they already sup
 
 Supported sites: **TVP VOD** (`tvp`).
 
-> Proof of concept: minimal features, and jobs are kept in memory only.
+> Proof of concept: minimal features.
 
 ## Install and run
 
@@ -66,7 +66,7 @@ section in `compose.yaml`.
 |---|---|---|---|
 | `-listen` | `VODARR_LISTEN` | `:8484` | listen address |
 | `-api-key` | `VODARR_API_KEY` | | required; used by both APIs |
-| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/` |
+| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the job database to `<dir>/.vodarr-jobs.db` |
 | `-categories` | `VODARR_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `VODARR_FFMPEG` | `ffmpeg` | ffmpeg binary |
 
@@ -145,7 +145,7 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 - **Release details:**
   - Releases are always named `1080p`; ffmpeg downloads the best quality available.
   - Only a single audio track is kept, and no subtitles.
-- **Restarts:** the queue and history are lost when vodarr restarts.
+- **Restarts:** the queue and history are saved in `.vodarr-jobs.db` in the download folder and survive restarts. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one vodarr can use it at a time.
 
 ## Adding a site
 

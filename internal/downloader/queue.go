@@ -17,6 +17,8 @@ import (
 	"sync"
 	"time"
 
+	bolt "go.etcd.io/bbolt"
+
 	"github.com/combor/vodarr/internal/nzb"
 	"github.com/combor/vodarr/internal/provider"
 )
@@ -54,31 +56,36 @@ type Engine interface {
 	Download(ctx context.Context, s provider.Stream, out string, progress func(done time.Duration, bytes int64)) error
 }
 
-// Job is a snapshot of one download.
+// Job is a snapshot of one download. The JSON form is its database record.
 type Job struct {
-	ID       string
-	Name     string
-	NZBName  string
-	Category string
-	Ref      nzb.Ref
-	Status   Status
-	Added    time.Time
-	Started  time.Time
-	Finished time.Time
-	Fraction float64 // 0..1
-	Bytes    int64   // written so far, or final size
-	Storage  string  // completed job folder
-	Error    string
-	Attempts int
-	RetryAt  time.Time
+	ID       string    `json:"id"`
+	Name     string    `json:"name"`
+	NZBName  string    `json:"nzb_name"`
+	Category string    `json:"category"`
+	Ref      nzb.Ref   `json:"ref"`
+	Status   Status    `json:"status"`
+	Added    time.Time `json:"added"`
+	Started  time.Time `json:"started,omitzero"`
+	Finished time.Time `json:"finished,omitzero"`
+	Fraction float64   `json:"fraction,omitzero"` // 0..1
+	Bytes    int64     `json:"bytes,omitzero"`    // written so far, or final size
+	Storage  string    `json:"storage,omitzero"`  // completed job folder
+	Error    string    `json:"error,omitzero"`
+	Attempts int       `json:"attempts,omitzero"`
+	RetryAt  time.Time `json:"retry_at,omitzero"`
 }
 
-// Queue holds jobs in memory and runs them with a single worker.
+// incompleteDir, under the download root, holds one work folder per running job.
+const incompleteDir = ".incomplete"
+
+// Queue runs jobs with a single worker. It keeps them in memory and saves
+// them to the job database when added, deleted or done with an attempt.
 type Queue struct {
 	dir       string
 	providers *provider.Registry
 	engine    Engine
 	log       *slog.Logger
+	db        *bolt.DB
 
 	retryDelay func(n int) time.Duration
 
@@ -96,19 +103,34 @@ type outage struct {
 	until time.Time
 }
 
-// New returns a queue that downloads into dir, which must be absolute.
-func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logger) *Queue {
-	return &Queue{
+// New opens the queue that downloads into dir, which must be absolute, with
+// the jobs saved there. Close it when done.
+func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logger) (*Queue, error) {
+	db, jobs, err := openDB(dir)
+	if err != nil {
+		return nil, err
+	}
+	// Nothing is running yet, so any work folders are left over from a crash.
+	if err := os.RemoveAll(filepath.Join(dir, incompleteDir)); err != nil {
+		log.Warn("removing unfinished downloads", "err", err)
+	}
+	q := &Queue{
 		dir:        dir,
 		providers:  providers,
 		engine:     engine,
 		log:        log,
+		db:         db,
 		retryDelay: backoff,
 		jobs:       make(map[string]*Job),
 		cancels:    make(map[string]context.CancelFunc),
 		outages:    make(map[string]*outage),
 		wake:       make(chan struct{}, 1),
 	}
+	for _, j := range jobs {
+		q.jobs[j.ID] = j
+		q.order = append(q.order, j.ID)
+	}
+	return q, nil
 }
 
 // Dir returns the download root.
@@ -128,6 +150,7 @@ func (q *Queue) Add(name, nzbName, category string, ref nzb.Ref) string {
 	q.mu.Lock()
 	q.jobs[job.ID] = job
 	q.order = append(q.order, job.ID)
+	q.put(job)
 	q.mu.Unlock()
 	q.log.Info("job queued", "id", job.ID, "name", job.Name, "category", category, "provider", ref.Provider, "ref", ref.ID)
 	select {
@@ -164,6 +187,7 @@ func (q *Queue) Delete(id string, deleteFiles bool) bool {
 			break
 		}
 	}
+	q.remove(id)
 	cancel := q.cancels[id]
 	// Under the lock, so moveToComplete can't reuse the path meanwhile.
 	if deleteFiles && job.Storage != "" {
@@ -253,7 +277,7 @@ func (q *Queue) process(parent context.Context, id string) {
 	q.mu.Unlock()
 
 	q.log.Info("job started", "id", id, "name", j.Name)
-	work := filepath.Join(q.dir, ".incomplete", id)
+	work := filepath.Join(q.dir, incompleteDir, id)
 	storage, err := q.run(ctx, id, j, work)
 	if rmErr := os.RemoveAll(work); rmErr != nil {
 		q.log.Warn("removing work dir", "id", id, "err", rmErr)
@@ -270,6 +294,9 @@ func (q *Queue) process(parent context.Context, id string) {
 		}
 		return
 	}
+	// Every outcome below is saved; progress while running is not, so a
+	// crash leaves the job Queued with its earlier attempts.
+	defer q.put(job)
 	if err != nil && parent.Err() != nil {
 		// Interrupted by shutdown, which is not the job's fault.
 		requeue(job)

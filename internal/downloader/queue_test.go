@@ -86,9 +86,20 @@ func (e *blockingEngine) Download(ctx context.Context, s provider.Stream, _ stri
 
 func startQueueWithDelay(t *testing.T, p *fakeProvider, e Engine, retryDelay time.Duration) *Queue {
 	t.Helper()
-	q := New(t.TempDir(), provider.NewRegistry(p), e, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	q := newQueue(t, t.TempDir(), p, e)
 	q.retryDelay = func(int) time.Duration { return retryDelay }
 	run(t, q)
+	return q
+}
+
+// newQueue opens a queue in dir and closes it when the test ends.
+func newQueue(t *testing.T, dir string, p provider.Provider, e Engine) *Queue {
+	t.Helper()
+	q, err := New(dir, provider.NewRegistry(p), e, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
 	return q
 }
 
@@ -278,7 +289,7 @@ func TestUnavailableIsNotRetried(t *testing.T) {
 func TestShutdownRequeues(t *testing.T) {
 	p := &fakeProvider{}
 	e := &blockingEngine{started: make(chan string, 1)}
-	q := New(t.TempDir(), provider.NewRegistry(p), e, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	q := newQueue(t, t.TempDir(), p, e)
 	stop := run(t, q)
 	q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
 	<-e.started
@@ -291,6 +302,101 @@ func TestShutdownRequeues(t *testing.T) {
 	}
 	if p.resolves != 1 {
 		t.Errorf("resolves = %d, want 1", p.resolves)
+	}
+}
+
+// Jobs survive a restart, deleted ones stay deleted, and folders stay reserved.
+func TestJobsPersist(t *testing.T) {
+	dir := t.TempDir()
+	q := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	stop := run(t, q)
+	ref := nzb.Ref{Provider: "fake", ID: "1"}
+	done := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", ref))
+	gone := waitFinished(t, q, q.Add("Other", "Other.nzb", "movies", ref))
+	q.Delete(gone.ID, true)
+	stop()
+	q.Close()
+	// As if the importer had moved the file out.
+	if err := os.RemoveAll(done.Storage); err != nil {
+		t.Fatal(err)
+	}
+
+	q = newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	jobs := q.Jobs()
+	if len(jobs) != 1 {
+		t.Fatalf("got %d jobs, want 1: %+v", len(jobs), jobs)
+	}
+	j := jobs[0]
+	if j.ID != done.ID || j.Status != StatusCompleted || j.Storage != done.Storage ||
+		j.Bytes != done.Bytes || j.Attempts != 1 || !j.Added.Equal(done.Added) {
+		t.Fatalf("reloaded %+v, want %+v", j, done)
+	}
+	run(t, q)
+	again := waitFinished(t, q, q.Add("Movie.2020", "Movie.2020.nzb", "movies", ref))
+	if want := done.Storage + ".1"; again.Storage != want {
+		t.Errorf("storage = %q, want %q", again.Storage, want)
+	}
+}
+
+// A job interrupted by shutdown is queued again after a restart.
+func TestInterruptedJobResumes(t *testing.T) {
+	dir := t.TempDir()
+	e := &blockingEngine{started: make(chan string, 1)}
+	q := newQueue(t, dir, &fakeProvider{}, e)
+	stop := run(t, q)
+	id := q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.started
+	stop()
+	q.Close()
+
+	q = newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	if jobs := q.Jobs(); len(jobs) != 1 || jobs[0].Status != StatusQueued || jobs[0].Attempts != 0 {
+		t.Fatalf("reloaded %+v", jobs)
+	}
+	run(t, q)
+	if j := waitFinished(t, q, id); j.Status != StatusCompleted || j.Attempts != 1 {
+		t.Fatalf("status = %s, attempts = %d", j.Status, j.Attempts)
+	}
+}
+
+// A job running when vodarr dies loads as Queued, since running isn't saved.
+func TestCrashedJobIsQueued(t *testing.T) {
+	dir := t.TempDir()
+	e := &blockingEngine{started: make(chan string, 1)}
+	q := newQueue(t, dir, &fakeProvider{}, e)
+	run(t, q)
+	q.Add("a", "a.nzb", "tv", nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.started
+	q.Close() // as if vodarr died mid-download
+
+	q2 := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	if jobs := q2.Jobs(); len(jobs) != 1 || jobs[0].Status != StatusQueued || jobs[0].Attempts != 0 {
+		t.Fatalf("reloaded %+v", jobs)
+	}
+}
+
+func TestNewRemovesLeftoverWork(t *testing.T) {
+	dir := t.TempDir()
+	stale := filepath.Join(dir, incompleteDir, "SABnzbd_nzo_x", "x.mp4")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("partial"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	if _, err := os.Stat(filepath.Join(dir, incompleteDir)); !os.IsNotExist(err) {
+		t.Errorf("leftover work not removed: %v", err)
+	}
+}
+
+// A second vodarr on the same folder fails instead of waiting for the lock.
+func TestDatabaseInUse(t *testing.T) {
+	dir := t.TempDir()
+	newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	_, err := New(dir, provider.NewRegistry(&fakeProvider{}), &fakeEngine{}, slog.New(slog.DiscardHandler))
+	if err == nil || !strings.Contains(err.Error(), "in use by another vodarr") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

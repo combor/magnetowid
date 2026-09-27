@@ -39,7 +39,11 @@ func (fakeEngine) Download(_ context.Context, _ provider.Stream, out string, pro
 func newServer(t *testing.T, runWorker bool) (*httptest.Server, *downloader.Queue) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	q := downloader.New(t.TempDir(), provider.NewRegistry(fakeProvider{}), fakeEngine{}, log)
+	q, err := downloader.New(t.TempDir(), provider.NewRegistry(fakeProvider{}), fakeEngine{}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { q.Close() })
 	if runWorker {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
