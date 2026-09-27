@@ -7,7 +7,7 @@
 <p align="center">
   <a href="https://github.com/combor/vodarr/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/combor/vodarr/ci.yml?branch=main&amp;event=push&amp;style=flat-square&amp;label=CI" alt="CI status"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-BSD--3--Clause-blue?style=flat-square" alt="License: BSD-3-Clause"></a>
-  <a href="docs/usage.md"><img src="https://img.shields.io/badge/status-proof%20of%20concept-orange?style=flat-square" alt="Status: proof of concept"></a>
+  <a href="https://github.com/combor/vodarr/releases/latest"><img src="https://img.shields.io/github/v/release/combor/vodarr?style=flat-square" alt="Latest release"></a>
 </p>
 
 <p align="center">
