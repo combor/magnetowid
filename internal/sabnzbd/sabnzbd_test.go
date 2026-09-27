@@ -243,6 +243,22 @@ func TestHistoryAndDelete(t *testing.T) {
 	}
 }
 
+// When a change can't be saved, the *arr is told it failed.
+func TestUnsavedChangesFail(t *testing.T) {
+	srv, q := newServer(t, false)
+	id := addFile(t, srv, "A.nzb", vodarrNZB(t))["nzo_ids"].([]any)[0].(string)
+	q.Close() // every database write fails from here on
+	if out := addFile(t, srv, "B.nzb", vodarrNZB(t)); out["status"] != false {
+		t.Errorf("addfile = %v", out)
+	}
+	if del := call(t, srv, url.Values{"mode": {"queue"}, "name": {"delete"}, "value": {id}}); del["status"] != false {
+		t.Errorf("delete = %v", del)
+	}
+	if jobs := q.Jobs(); len(jobs) != 1 || jobs[0].ID != id {
+		t.Errorf("jobs = %+v", jobs)
+	}
+}
+
 // Sonarr/Radarr page history with start and limit.
 func TestHistoryPaging(t *testing.T) {
 	srv, _ := newServer(t, true)

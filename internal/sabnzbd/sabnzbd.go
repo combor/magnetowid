@@ -95,7 +95,12 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = strings.TrimSuffix(header.Filename, ".nzb")
 	}
-	id := h.Queue.Add(name, header.Filename, r.FormValue("cat"), parsePriority(r.FormValue("priority")), ref)
+	id, err := h.Queue.Add(name, header.Filename, r.FormValue("cat"), parsePriority(r.FormValue("priority")), ref)
+	if err != nil {
+		h.Log.Error("queueing job", "name", name, "err", err)
+		writeJSON(w, errorResponse(err.Error()))
+		return
+	}
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{id}})
 }
 
@@ -128,7 +133,16 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	deleteFiles := r.FormValue("del_files") == "1"
 	var ids []string
 	for _, id := range strings.Split(r.FormValue("value"), ",") {
-		if id = strings.TrimSpace(id); id != "" && h.Queue.Delete(id, deleteFiles) {
+		if id = strings.TrimSpace(id); id == "" {
+			continue
+		}
+		ok, err := h.Queue.Delete(id, deleteFiles)
+		if err != nil {
+			h.Log.Error("deleting job", "id", id, "err", err)
+			writeJSON(w, errorResponse(err.Error()))
+			return
+		}
+		if ok {
 			ids = append(ids, id)
 		}
 	}

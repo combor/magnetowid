@@ -58,7 +58,7 @@ func openDB(dir string) (*bolt.DB, []*Job, error) {
 }
 
 // put saves job. q.mu must be held, so saves of one job can't reorder.
-func (q *Queue) put(job *Job) {
+func (q *Queue) put(job *Job) error {
 	v, err := json.Marshal(job)
 	if err == nil {
 		err = q.db.Update(func(tx *bolt.Tx) error {
@@ -66,12 +66,13 @@ func (q *Queue) put(job *Job) {
 		})
 	}
 	if err != nil {
-		q.log.Warn("saving job", "id", job.ID, "err", err)
+		return fmt.Errorf("saving job %s: %w", job.ID, err)
 	}
+	return nil
 }
 
 // remove deletes jobs from the database. q.mu must be held.
-func (q *Queue) remove(ids ...string) {
+func (q *Queue) remove(ids ...string) error {
 	err := q.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(jobsBucket)
 		for _, id := range ids {
@@ -82,8 +83,9 @@ func (q *Queue) remove(ids ...string) {
 		return nil
 	})
 	if err != nil {
-		q.log.Warn("removing jobs", "ids", ids, "err", err)
+		return fmt.Errorf("removing jobs %v: %w", ids, err)
 	}
+	return nil
 }
 
 // Close closes the job database. Call it after Run has returned.

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,8 +149,8 @@ func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logg
 func (q *Queue) Dir() string { return q.dir }
 
 // Add queues a job and returns its SABnzbd-style ID. Higher priority jobs
-// start first.
-func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) string {
+// start first. It fails if the job can't be saved.
+func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) (string, error) {
 	job := &Job{
 		ID:       "SABnzbd_nzo_" + randomHex(8),
 		Name:     SanitizeName(name),
@@ -161,9 +162,12 @@ func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) s
 		Priority: priority,
 	}
 	q.mu.Lock()
+	if err := q.put(job); err != nil {
+		q.mu.Unlock()
+		return "", err
+	}
 	q.jobs[job.ID] = job
 	q.order = append(q.order, job.ID)
-	q.put(job)
 	q.mu.Unlock()
 	q.log.Info("job queued", "id", job.ID, "name", job.Name, "category", category, "priority", priority,
 		"provider", ref.Provider, "ref", ref.ID)
@@ -171,7 +175,7 @@ func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) s
 	case q.wake <- struct{}{}:
 	default:
 	}
-	return job.ID
+	return job.ID, nil
 }
 
 // Jobs returns snapshots of all jobs in the order they were added.
@@ -186,13 +190,18 @@ func (q *Queue) Jobs() []Job {
 }
 
 // Delete removes a job, cancelling it if running, and with deleteFiles its
-// folder. It reports whether the job existed.
-func (q *Queue) Delete(id string, deleteFiles bool) bool {
+// folder. It returns false if there is no such job, and an error, changing
+// nothing, if the removal can't be saved.
+func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
 	q.mu.Lock()
 	job, ok := q.jobs[id]
 	if !ok {
 		q.mu.Unlock()
-		return false
+		return false, nil
+	}
+	if err := q.remove(id); err != nil {
+		q.mu.Unlock()
+		return false, err
 	}
 	delete(q.jobs, id)
 	for i, v := range q.order {
@@ -201,7 +210,6 @@ func (q *Queue) Delete(id string, deleteFiles bool) bool {
 			break
 		}
 	}
-	q.remove(id)
 	cancel := q.cancels[id]
 	// Under the lock, so moveToComplete can't reuse the path meanwhile.
 	if deleteFiles && job.Storage != "" {
@@ -215,7 +223,7 @@ func (q *Queue) Delete(id string, deleteFiles bool) bool {
 		cancel()
 	}
 	q.log.Info("job deleted", "id", id, "delete_files", deleteFiles)
-	return true
+	return true, nil
 }
 
 // Run processes queued jobs until ctx is cancelled.
@@ -318,7 +326,9 @@ func (q *Queue) process(parent context.Context, id string) {
 	// Every outcome below is saved; progress while running is not, so a
 	// crash leaves the job Queued with its earlier attempts.
 	defer func() {
-		q.put(job)
+		if err := q.put(job); err != nil {
+			q.log.Warn("database write failed", "err", err)
+		}
 		q.prune(time.Now())
 	}()
 	if err != nil && parent.Err() != nil {
@@ -372,21 +382,25 @@ func (q *Queue) process(parent context.Context, id string) {
 // files, which belong to Sonarr/Radarr. q.mu must be held.
 func (q *Queue) prune(now time.Time) {
 	var old []string
-	kept := q.order[:0]
 	for _, id := range q.order {
 		j := q.jobs[id]
 		if (j.Status == StatusCompleted || j.Status == StatusFailed) && now.Sub(j.Finished) > historyRetention {
 			old = append(old, id)
-			delete(q.jobs, id)
-			continue
 		}
-		kept = append(kept, id)
 	}
-	q.order = kept
-	if len(old) > 0 {
-		q.remove(old...)
-		q.log.Info("forgot old finished jobs", "count", len(old))
+	if len(old) == 0 {
+		return
 	}
+	// Kept in memory until removed on disk, so a failure is retried next time.
+	if err := q.remove(old...); err != nil {
+		q.log.Warn("database write failed", "err", err)
+		return
+	}
+	for _, id := range old {
+		delete(q.jobs, id)
+	}
+	q.order = slices.DeleteFunc(q.order, func(id string) bool { return q.jobs[id] == nil })
+	q.log.Info("forgot old finished jobs", "count", len(old))
 }
 
 // requeue returns a started job to the queue without counting the attempt.
