@@ -94,7 +94,7 @@ section in `compose.yaml`. For the Linux service, set them in
 |---|---|---|---|
 | `-listen` | `VODARR_LISTEN` | `:8484` | listen address |
 | `-api-key` | `VODARR_API_KEY` | | required; used by both APIs |
-| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the database of jobs and watched series to `<dir>/.vodarr-jobs.db` |
+| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the database of jobs and of the series and films watched for new releases to `<dir>/.vodarr-jobs.db` |
 | `-categories` | `VODARR_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `VODARR_FFMPEG` | `ffmpeg` | ffmpeg binary |
 
@@ -118,19 +118,22 @@ The test buttons should pass for both. When a site has nothing new to offer,
 its feed holds a placeholder item, which is never grabbed, because the indexer
 test fails on an empty feed.
 
-### New episodes (RSS)
+### New episodes and films (RSS)
 
-Sonarr finds new episodes through RSS sync, every 15 minutes by default.
-vodarr's feed offers the new episodes of the series it watches:
+Sonarr and Radarr find new releases through RSS sync, every 15 minutes by
+default. vodarr's feeds offer the new episodes of the series it watches, and
+the films it watches for once the site has them:
 
 - vodarr starts watching a series the first time Sonarr searches for it, for
   example when the series is added with a search for missing episodes.
-- After upgrading from a vodarr without RSS, run a search on each existing
-  series once, e.g. **Search Monitored** on the series page.
-- The feed covers episodes that aired in the last 14 days. Older ones need a
-  search.
-- It's for TV only, for sites whose notes say they support it. Radarr's feed
-  holds only the placeholder.
+- It watches for a film the first time Radarr searches for it, for example
+  when the film is added with a search for it.
+- After upgrading, search once for what is already wanted: **Search
+  Monitored** on each series page in Sonarr, and **Search All** under
+  **Wanted → Missing** in Radarr.
+- The feed covers episodes that aired in the last 14 days, and films while
+  they are among the site's newest. Older ones need a search.
+- It's for sites whose notes say they support it.
 
 ## Docker networking and shared downloads
 
@@ -197,7 +200,7 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 - **Release details:**
   - A release's name gives the resolution and codecs of the best stream the site offers, which is the one vodarr downloads. vodarr reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
   - Only a single audio track is kept, and no subtitles.
-- **Restarts:** the queue, the history and the series watched for new episodes are saved in `.vodarr-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one vodarr can use it at a time.
+- **Restarts:** the queue, the history, and the series and films watched for new releases are saved in `.vodarr-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one vodarr can use it at a time.
 
 ## Adding a site
 

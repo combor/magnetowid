@@ -731,6 +731,19 @@ func TestRSSKind(t *testing.T) {
 	}
 }
 
+// A film in Radarr's feed is named with the year the provider gives, which is
+// Radarr's own.
+func TestRSSNamesFilms(t *testing.T) {
+	fp := &fakeRecentProvider{releases: []provider.Release{
+		{Title: "Kler", Item: provider.Item{ID: "1", Kind: provider.Movie, Title: "Kler", Year: 2018}},
+	}}
+	params := url.Values{"t": {"movie"}, "cat": {"2000,2040"}, "apikey": {"secret"}}
+	items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", params))
+	if len(items) != 1 || items[0].Title != "Kler.2018.1080p.WEB-DL.AAC.H.264-FAKE" || attrValue(items[0], "category") != "2040" {
+		t.Errorf("items = %+v", items)
+	}
+}
+
 // manyReleases returns n releases published an hour ago, r000 onwards.
 func manyReleases(n int) []provider.Release {
 	published := time.Now().Add(-time.Hour).Truncate(time.Second)

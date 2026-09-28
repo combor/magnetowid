@@ -136,7 +136,7 @@ func TestSearchTVDBSoapGuideDown(t *testing.T) {
 func TestFeedRebuildSoap(t *testing.T) {
 	p, _ := newSoapProvider(t)
 	p.watch(7, "Hundreds")
-	p.rebuildFeed(context.Background())
+	p.rebuildSeries(context.Background())
 	want := "11941 Hundreds S27E05, 11942 Hundreds S27E06, 11943 Hundreds S27E07"
 	if got := describe(feedReleases(p)); got != want {
 		t.Errorf("feed = %s; want %s", got, want)
