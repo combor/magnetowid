@@ -17,10 +17,10 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/combor/vodarr/internal/downloader"
-	"github.com/combor/vodarr/internal/nzb"
-	"github.com/combor/vodarr/internal/provider"
-	"github.com/combor/vodarr/internal/store"
+	"github.com/combor/magnetowid/internal/downloader"
+	"github.com/combor/magnetowid/internal/nzb"
+	"github.com/combor/magnetowid/internal/provider"
+	"github.com/combor/magnetowid/internal/store"
 )
 
 type fakeProvider struct{}
@@ -123,7 +123,7 @@ func addFileWithPriority(t *testing.T, srv *httptest.Server, filename string, bo
 	return out
 }
 
-func vodarrNZB(t *testing.T) []byte {
+func magnetowidNZB(t *testing.T) []byte {
 	t.Helper()
 	b, err := nzb.Encode(nzb.Ref{Provider: "fake", ID: "381046", Duration: 60})
 	if err != nil {
@@ -176,7 +176,7 @@ func TestVersionAndConfig(t *testing.T) {
 
 func TestAddFileQueuesJob(t *testing.T) {
 	srv, _ := newServer(t, false)
-	out := addFile(t, srv, "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP.nzb", vodarrNZB(t))
+	out := addFile(t, srv, "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP.nzb", magnetowidNZB(t))
 	ids, _ := out["nzo_ids"].([]any)
 	if out["status"] != true || len(ids) != 1 {
 		t.Fatalf("addfile = %v", out)
@@ -200,7 +200,7 @@ func TestAddFileQueuesJob(t *testing.T) {
 
 func TestAddFilePriority(t *testing.T) {
 	srv, q := newServer(t, false)
-	addFileWithPriority(t, srv, "A.nzb", vodarrNZB(t), "1")
+	addFileWithPriority(t, srv, "A.nzb", magnetowidNZB(t), "1")
 	slots := call(t, srv, url.Values{"mode": {"queue"}})["queue"].(map[string]any)["slots"].([]any)
 	if len(slots) != 1 || slots[0].(map[string]any)["priority"] != "High" || q.Jobs()[0].Priority != 1 {
 		t.Fatalf("slots = %v", slots)
@@ -229,7 +229,7 @@ func TestAddFileRejectsForeignNZB(t *testing.T) {
 
 func TestHistoryAndDelete(t *testing.T) {
 	srv, q := newServer(t, true)
-	out := addFile(t, srv, "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP.nzb", vodarrNZB(t))
+	out := addFile(t, srv, "Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-TVP.nzb", magnetowidNZB(t))
 	id := out["nzo_ids"].([]any)[0].(string)
 
 	var slot map[string]any
@@ -267,9 +267,9 @@ func TestHistoryAndDelete(t *testing.T) {
 func TestUnsavedChangesFail(t *testing.T) {
 	db := openDB(t)
 	srv, q := newServerOn(t, db, false)
-	id := addFile(t, srv, "A.nzb", vodarrNZB(t))["nzo_ids"].([]any)[0].(string)
+	id := addFile(t, srv, "A.nzb", magnetowidNZB(t))["nzo_ids"].([]any)[0].(string)
 	db.Close() // every database write fails from here on
-	if out := addFile(t, srv, "B.nzb", vodarrNZB(t)); out["status"] != false {
+	if out := addFile(t, srv, "B.nzb", magnetowidNZB(t)); out["status"] != false {
 		t.Errorf("addfile = %v", out)
 	}
 	if del := call(t, srv, url.Values{"mode": {"queue"}, "name": {"delete"}, "value": {id}}); del["status"] != false {
@@ -284,7 +284,7 @@ func TestUnsavedChangesFail(t *testing.T) {
 func TestHistoryPaging(t *testing.T) {
 	srv, _ := newServer(t, true)
 	for _, name := range []string{"A.nzb", "B.nzb", "C.nzb"} {
-		addFile(t, srv, name, vodarrNZB(t))
+		addFile(t, srv, name, magnetowidNZB(t))
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	for {

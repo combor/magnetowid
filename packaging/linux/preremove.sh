@@ -6,7 +6,7 @@ set -e
 case "$1" in
 remove | 0)
 	if command -v systemctl >/dev/null 2>&1; then
-		systemctl disable --now vodarr.service >/dev/null 2>&1 || true
+		systemctl disable --now magnetowid.service >/dev/null 2>&1 || true
 	fi
 	;;
 esac

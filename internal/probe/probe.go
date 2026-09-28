@@ -1,5 +1,5 @@
 // Package probe reads the quality of a provider's stream, so releases are
-// named with the quality vodarr will download.
+// named with the quality magnetowid will download.
 package probe
 
 import (
@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/combor/vodarr/internal/hls"
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/hls"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 const (

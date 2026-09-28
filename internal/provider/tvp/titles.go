@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // Sonarr's series titles are often English ("Days of Honor"), but TVP only
@@ -26,8 +26,8 @@ import (
 const (
 	skyhookURL  = "https://skyhook.sonarr.tv/v1/tvdb/shows/en"
 	wikidataURL = "https://www.wikidata.org/w/api.php"
-	// botUserAgent identifies vodarr, as Wikidata requires.
-	botUserAgent = "vodarr (https://github.com/combor/vodarr)"
+	// botUserAgent identifies magnetowid, as Wikidata requires.
+	botUserAgent = "magnetowid (https://github.com/combor/magnetowid)"
 	// lookupTimeout leaves Sonarr time to search by title if a lookup fails.
 	lookupTimeout = 10 * time.Second
 )

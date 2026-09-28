@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/nzb"
-	"github.com/combor/vodarr/internal/provider"
-	"github.com/combor/vodarr/internal/store"
+	"github.com/combor/magnetowid/internal/nzb"
+	"github.com/combor/magnetowid/internal/provider"
+	"github.com/combor/magnetowid/internal/store"
 )
 
 // fakeProvider can't be reached for the first offline resolves, then returns
@@ -418,7 +418,8 @@ func TestInterruptedJobResumes(t *testing.T) {
 	}
 }
 
-// A job running when vodarr dies loads as Queued, since running isn't saved.
+// A job running when magnetowid dies loads as Queued, since running isn't
+// saved.
 func TestCrashedJobIsQueued(t *testing.T) {
 	dir := t.TempDir()
 	e := &blockingEngine{started: make(chan string, 1)}
@@ -426,7 +427,7 @@ func TestCrashedJobIsQueued(t *testing.T) {
 	run(t, q)
 	add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
 	<-e.started
-	q.db.Close() // as if vodarr died mid-download
+	q.db.Close() // as if magnetowid died mid-download
 
 	q2 := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
 	if jobs := q2.Jobs(); len(jobs) != 1 || jobs[0].Status != StatusQueued || jobs[0].Attempts != 0 {

@@ -19,26 +19,26 @@ ARG VERSION=dev
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /vodarr ./cmd/vodarr
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /magnetowid ./cmd/magnetowid
 
-# alpine:3.24.2. vodarr shells out to ffmpeg, so the runtime needs a distro
+# alpine:3.24.2. magnetowid shells out to ffmpeg, so the runtime needs a distro
 # rather than distroless; the arm64 image installs it under emulation.
 FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
-LABEL org.opencontainers.image.title="vodarr" \
+LABEL org.opencontainers.image.title="magnetowid" \
       org.opencontainers.image.description="Downloads movies and series from video-on-demand sites for Sonarr and Radarr." \
-      org.opencontainers.image.source="https://github.com/combor/vodarr" \
+      org.opencontainers.image.source="https://github.com/combor/magnetowid" \
       org.opencontainers.image.licenses="BSD-3-Clause"
 
 # /downloads is owned by the default user so a fresh named volume is writable.
 RUN apk add --no-cache ffmpeg \
     && install -d -o 65532 -g 65532 /downloads
 
-COPY --from=build /vodarr /usr/local/bin/vodarr
-COPY LICENSE /usr/share/licenses/vodarr/LICENSE
+COPY --from=build /magnetowid /usr/local/bin/magnetowid
+COPY LICENSE /usr/share/licenses/magnetowid/LICENSE
 
-ENV VODARR_DOWNLOAD_DIR=/downloads
+ENV MAGNETOWID_DOWNLOAD_DIR=/downloads
 EXPOSE 8484
 
 USER 65532:65532
-ENTRYPOINT ["/usr/local/bin/vodarr"]
+ENTRYPOINT ["/usr/local/bin/magnetowid"]

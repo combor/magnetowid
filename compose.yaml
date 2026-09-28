@@ -1,16 +1,16 @@
 services:
-  vodarr:
-    image: ghcr.io/combor/vodarr:latest
+  magnetowid:
+    image: ghcr.io/combor/magnetowid:latest
     restart: unless-stopped
-    user: "${VODARR_UID:-1000}:${VODARR_GID:-1000}"
+    user: "${MAGNETOWID_UID:-1000}:${MAGNETOWID_GID:-1000}"
     ports:
       - "8484:8484"
     environment:
-      VODARR_API_KEY: "${VODARR_API_KEY:?Set VODARR_API_KEY in .env}"
-      VODARR_DOWNLOAD_DIR: /downloads
+      MAGNETOWID_API_KEY: "${MAGNETOWID_API_KEY:?Set MAGNETOWID_API_KEY in .env}"
+      MAGNETOWID_DOWNLOAD_DIR: /downloads
     volumes:
       - type: bind
-        source: ${VODARR_DOWNLOAD_PATH:-./downloads}
+        source: ${MAGNETOWID_DOWNLOAD_PATH:-./downloads}
         target: /downloads
         bind:
           create_host_path: false

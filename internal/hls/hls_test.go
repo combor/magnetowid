@@ -8,7 +8,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // TVP's master playlist (2026-09-26), variants reordered to test sorting.
@@ -106,7 +106,7 @@ func TestLoad(t *testing.T) {
 	}))
 	defer srv.Close()
 	ctx := context.Background()
-	h := http.Header{"User-Agent": {"vodarr-test"}}
+	h := http.Header{"User-Agent": {"magnetowid-test"}}
 
 	m, ok, err := Load(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/token/abc/video.ism/video-fmp4.m3u8", Header: h})
 	if err != nil || !ok {
@@ -119,7 +119,7 @@ func TestLoad(t *testing.T) {
 		},
 		Audio: srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f1-a1.m3u8",
 	}
-	if m != want || gotUA != "vodarr-test" {
+	if m != want || gotUA != "magnetowid-test" {
 		t.Errorf("master: got %+v (UA %q), want %+v", m, gotUA, want)
 	}
 

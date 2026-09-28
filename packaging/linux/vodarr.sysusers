@@ -1,3 +1,0 @@
-u vodarr - "vodarr daemon" /var/lib/vodarr
-g media -
-m vodarr media

@@ -1,4 +1,4 @@
-// Package nzb wraps a vodarr job reference in an NZB document, which
+// Package nzb wraps a magnetowid job reference in an NZB document, which
 // Sonarr/Radarr pass unchanged from the indexer to the download client.
 package nzb
 
@@ -11,11 +11,12 @@ import (
 
 const (
 	namespace = "http://www.newzbin.com/DTD/2003/nzb"
-	metaType  = "vodarr"
+	metaType  = "magnetowid"
 )
 
-// ErrNotVodarr is returned by Decode for NZBs that carry no vodarr reference.
-var ErrNotVodarr = errors.New("nzb: not a vodarr job")
+// ErrNotMagnetowid is returned by Decode for NZBs that carry no magnetowid
+// reference.
+var ErrNotMagnetowid = errors.New("nzb: not a magnetowid job")
 
 // Ref identifies content on a provider.
 type Ref struct {
@@ -67,10 +68,10 @@ func Encode(r Ref) ([]byte, error) {
 		XMLName: xml.Name{Space: namespace, Local: "nzb"},
 		Head:    head{Meta: []meta{{Type: metaType, Value: string(value)}}},
 		Files: []file{{
-			Poster:   "vodarr",
-			Subject:  "vodarr placeholder",
-			Groups:   []string{"alt.binaries.vodarr"},
-			Segments: []segment{{Bytes: 0, Number: 1, ID: "placeholder@vodarr"}},
+			Poster:   "magnetowid",
+			Subject:  "magnetowid placeholder",
+			Groups:   []string{"alt.binaries.magnetowid"},
+			Segments: []segment{{Bytes: 0, Number: 1, ID: "placeholder@magnetowid"}},
 		}},
 	}
 	body, err := xml.MarshalIndent(doc, "", "  ")
@@ -80,7 +81,7 @@ func Encode(r Ref) ([]byte, error) {
 	return append([]byte(xml.Header), body...), nil
 }
 
-// Decode extracts the vodarr reference from an NZB document.
+// Decode extracts the magnetowid reference from an NZB document.
 func Decode(b []byte) (Ref, error) {
 	var doc document
 	if err := xml.Unmarshal(b, &doc); err != nil {
@@ -95,12 +96,12 @@ func Decode(b []byte) (Ref, error) {
 		}
 		var r Ref
 		if err := json.Unmarshal([]byte(m.Value), &r); err != nil {
-			return Ref{}, fmt.Errorf("nzb: bad vodarr meta: %w", err)
+			return Ref{}, fmt.Errorf("nzb: bad magnetowid meta: %w", err)
 		}
 		if r.Provider == "" || r.ID == "" {
-			return Ref{}, errors.New("nzb: vodarr meta lacks provider or id")
+			return Ref{}, errors.New("nzb: magnetowid meta lacks provider or id")
 		}
 		return r, nil
 	}
-	return Ref{}, ErrNotVodarr
+	return Ref{}, ErrNotMagnetowid
 }

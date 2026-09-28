@@ -1,4 +1,4 @@
-module github.com/combor/vodarr
+module github.com/combor/magnetowid
 
 go 1.27.1
 

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // feedReleases returns p's feed by episode ID, without starting a rebuild.

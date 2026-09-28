@@ -20,8 +20,8 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/combor/vodarr/internal/nzb"
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/nzb"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // Status is a SABnzbd job state.
