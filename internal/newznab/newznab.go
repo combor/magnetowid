@@ -492,8 +492,8 @@ func (h *Handler) placeholder(r *http.Request, p provider.Provider, movie bool) 
 
 // ReleaseTitle builds a release name from the *arr's own query title and
 // year, so the release matches by title: Sonarr/Radarr won't auto-import a
-// release matched only by ID. The quality is the stream's, so the one they
-// grab by is the one they record on import.
+// release matched only by ID. The audio language and quality are the
+// stream's, so the ones they grab by are the ones they record on import.
 func ReleaseTitle(providerName string, q provider.Query, it provider.Item, info probe.Info) string {
 	title := strings.Join(strings.Fields(q.Title), ".")
 	if it.Kind == provider.Movie {
@@ -507,7 +507,11 @@ func ReleaseTitle(providerName string, q provider.Query, it provider.Item, info 
 	} else {
 		title += fmt.Sprintf(".S%02dE%02d", it.Season, it.Episode)
 	}
-	parts := []string{title, info.Resolution(), "WEB-DL"}
+	parts := []string{title}
+	if lang := info.LanguageName(); lang != "" {
+		parts = append(parts, lang)
+	}
+	parts = append(parts, info.Resolution(), "WEB-DL")
 	for _, codec := range []string{info.AudioCodec(), info.VideoCodec()} {
 		if codec != "" {
 			parts = append(parts, codec)

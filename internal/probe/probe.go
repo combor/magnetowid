@@ -40,11 +40,13 @@ var ErrNotHLS = errors.New("not an HLS master playlist")
 // errNoResolution means the best variant doesn't give its resolution.
 var errNoResolution = errors.New("stream gives no resolution")
 
-// Info is the quality of the variant the downloader will fetch.
+// Info is the quality of the variant the downloader will fetch, and the
+// language of its audio.
 type Info struct {
 	Width, Height int
 	Codecs        string // RFC 6381, e.g. "avc1.640029,mp4a.40.2"
 	Bandwidth     int64  // bits per second, average if the playlist gives it
+	Language      string // RFC 5646, e.g. "pl"; "" if the playlist doesn't say
 }
 
 // Resolution names the resolution the way Sonarr and Radarr classify a file
@@ -109,6 +111,27 @@ func (i Info) AudioCodec() string {
 		name = n
 	}
 	return name
+}
+
+// languageNames are the languages Sonarr and Radarr both read from a word
+// in a release name, by ISO 639-1 code.
+var languageNames = map[string]string{
+	"ar": "ARABIC", "bg": "BULGARIAN", "ca": "CATALAN", "da": "DANISH",
+	"de": "GERMAN", "el": "GREEK", "en": "ENGLISH", "es": "SPANISH",
+	"fi": "FINNISH", "fr": "FRENCH", "he": "HEBREW", "hi": "HINDI",
+	"hu": "HUNGARIAN", "is": "ICELANDIC", "it": "ITALIAN", "ja": "JAPANESE",
+	"ko": "KOREAN", "lv": "LATVIAN", "ml": "MALAYALAM", "nb": "NORWEGIAN",
+	"nl": "DUTCH", "nn": "NORWEGIAN", "no": "NORWEGIAN", "pl": "POLISH",
+	"pt": "PORTUGUESE", "ro": "ROMANIAN", "ru": "RUSSIAN", "sk": "SLOVAK",
+	"sv": "SWEDISH", "th": "THAI", "tr": "TURKISH", "uk": "UKRAINIAN",
+	"vi": "VIETNAMESE", "zh": "CHINESE",
+}
+
+// LanguageName names the audio's language as release names do, or "" if
+// it is unknown or Sonarr and Radarr couldn't read the name.
+func (i Info) LanguageName() string {
+	primary, _, _ := strings.Cut(i.Language, "-")
+	return languageNames[strings.ToLower(strings.TrimSpace(primary))]
 }
 
 func hasPrefix(s string, prefixes ...string) bool {
@@ -208,7 +231,7 @@ func (pr *Prober) probe(ctx context.Context, p provider.Provider, id string) (In
 				if !ok {
 					return Info{}, ErrNotHLS
 				}
-				return info(m.Video)
+				return info(m)
 			}
 		}
 		if errors.Is(err, provider.ErrUnavailable) || ctx.Err() != nil {
@@ -218,7 +241,8 @@ func (pr *Prober) probe(ctx context.Context, p provider.Provider, id string) (In
 	return Info{}, err
 }
 
-func info(v hls.Variant) (Info, error) {
+func info(m hls.Master) (Info, error) {
+	v := m.Video
 	if v.Width == 0 && v.Height == 0 {
 		return Info{}, errNoResolution
 	}
@@ -226,5 +250,5 @@ func info(v hls.Variant) (Info, error) {
 	if bw == 0 {
 		bw = v.Bandwidth
 	}
-	return Info{Width: v.Width, Height: v.Height, Codecs: v.Codecs, Bandwidth: bw}, nil
+	return Info{Width: v.Width, Height: v.Height, Codecs: v.Codecs, Bandwidth: bw, Language: m.AudioLanguage}, nil
 }
