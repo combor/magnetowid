@@ -8,8 +8,6 @@ magnetowid needs no changes to either app: it looks like two things they already
 
 Supported sites: **TVP VOD** (`tvp`). See the [TVP VOD notes](../internal/provider/tvp/README.md).
 
-> Proof of concept: minimal features.
-
 ## Install and run
 
 ### Docker Compose
