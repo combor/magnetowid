@@ -72,25 +72,32 @@ func testSonarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid) {
 	s["rootFolderPath"] = a.library
 	s["monitored"] = true
 	s["seasonFolder"] = true
-	s["addOptions"] = map[string]any{"monitor": "none", "searchForMissingEpisodes": false}
+	// Every episode is monitored, but only S01E02 is searched for and only
+	// S01E03 is in the feed.
+	s["addOptions"] = map[string]any{"monitor": "all", "searchForMissingEpisodes": false}
 	var series struct{ ID int }
 	a.call(ctx, t, "POST", "/series", s, &series)
-	// Monitoring none of its episodes leaves the series unmonitored too.
-	a.call(ctx, t, "PUT", "/series/editor", map[string]any{"seriesIds": []int{series.ID}, "monitored": true}, nil)
 
-	var episodes []struct{ ID, SeasonNumber, EpisodeNumber int }
-	a.call(ctx, t, "GET", "/episode?seriesId="+strconv.Itoa(series.ID), nil, &episodes)
+	// The episodes come with the refresh the add queues.
 	episodeID := func(season, episode int) int {
-		i := slices.IndexFunc(episodes, func(e struct{ ID, SeasonNumber, EpisodeNumber int }) bool {
-			return e.SeasonNumber == season && e.EpisodeNumber == episode
-		})
-		if i < 0 {
-			t.Fatalf("Sonarr has no S%02dE%02d", season, episode)
+		wait, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+		for {
+			var episodes []struct{ ID, SeasonNumber, EpisodeNumber int }
+			a.call(wait, t, "GET", "/episode?seriesId="+strconv.Itoa(series.ID), nil, &episodes)
+			for _, e := range episodes {
+				if e.SeasonNumber == season && e.EpisodeNumber == episode {
+					return e.ID
+				}
+			}
+			select {
+			case <-wait.Done():
+				t.Fatalf("Sonarr has no S%02dE%02d", season, episode)
+			case <-time.After(500 * time.Millisecond):
+			}
 		}
-		return episodes[i].ID
 	}
 	e2, e3 := episodeID(1, 2), episodeID(1, 3)
-	a.call(ctx, t, "PUT", "/episode/monitor", map[string]any{"episodeIds": []int{e2, e3}, "monitored": true}, nil)
 	episodeFile := func(id int) func() map[string]any {
 		return func() map[string]any {
 			var e struct{ EpisodeFileID int }

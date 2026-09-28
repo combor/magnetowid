@@ -246,6 +246,12 @@ func (q *Queue) setJobsPaused(paused bool, ids []string) ([]string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	var done []string
+	// Also if a save fails after others resumed jobs.
+	defer func() {
+		if !paused && len(done) > 0 {
+			q.wakeUp()
+		}
+	}()
 	for _, id := range ids {
 		job, ok := q.jobs[id]
 		if !ok || (job.Status != StatusQueued && job.Status != StatusDownloading) {
@@ -272,9 +278,6 @@ func (q *Queue) setJobsPaused(paused bool, ids []string) ([]string, error) {
 			}
 		}
 		done = append(done, id)
-	}
-	if !paused && len(done) > 0 {
-		q.wakeUp()
 	}
 	return done, nil
 }
@@ -406,6 +409,10 @@ func (q *Queue) process(parent context.Context, id string) {
 		return
 	}
 	q.cancels[id] = cancel
+	// A pause since next picked the job had nothing to cancel yet.
+	if q.paused || job.Paused {
+		cancel(errPaused)
+	}
 	j := *job
 	q.mu.Unlock()
 
@@ -535,6 +542,9 @@ func retryable(err error) bool {
 
 // run makes one download attempt and returns the completed folder.
 func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string, error) {
+	if err := context.Cause(ctx); err != nil {
+		return "", err // stopped before it began
+	}
 	p, ok := q.providers.Get(j.Ref.Provider)
 	if !ok {
 		return "", fmt.Errorf("%w %q", errUnknownProvider, j.Ref.Provider)

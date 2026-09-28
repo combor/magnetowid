@@ -389,6 +389,29 @@ func TestPauseRunningJob(t *testing.T) {
 	waitJob(t, q, id, func(j Job) bool { return j.Status == StatusDownloading && !j.Paused && j.Attempts == 1 })
 }
 
+// A pause between the worker picking a job and starting its download stops
+// the download too.
+func TestPauseBeforeDownloadStarts(t *testing.T) {
+	for name, pause := range map[string]func(q *Queue, id string) error{
+		"job":   func(q *Queue, id string) error { _, err := q.PauseJobs(id); return err },
+		"queue": func(q *Queue, _ string) error { return q.SetPaused(true) },
+	} {
+		e := &fakeEngine{}
+		q := newQueue(t, t.TempDir(), &fakeProvider{}, e)
+		id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+		if picked, _, ok := q.next(); !ok || picked != id {
+			t.Fatalf("%s: next = %q, %v", name, picked, ok)
+		}
+		if err := pause(q, id); err != nil {
+			t.Fatal(err)
+		}
+		q.process(context.Background(), id)
+		if j := q.Jobs()[0]; j.Status != StatusQueued || j.Attempts != 0 || e.calls != 0 {
+			t.Errorf("%s: job %s after %d attempts, %d downloads", name, j.Status, j.Attempts, e.calls)
+		}
+	}
+}
+
 // Pausing the queue stops the running download and starts nothing until it
 // is resumed, even after a restart.
 func TestPauseQueue(t *testing.T) {

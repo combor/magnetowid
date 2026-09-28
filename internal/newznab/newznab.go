@@ -193,8 +193,8 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provide
 	for _, rel := range pg {
 		items = append(items, h.release(r, p, provider.Query{Kind: rel.Kind, Title: rel.Title}, rel.Item, rel.info))
 	}
-	// A page that isn't full is the last Sonarr reads.
-	if len(pg) < lim {
+	// Once, after the last release that can be read, so paging ends.
+	if n := len(res.read); off <= n && n < off+lim {
 		items = append(items, h.placeholder(r, p, movie))
 	}
 	writeXML(w, h.feed(p, items))
@@ -205,8 +205,11 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provide
 // next offset whenever a page is full. Releases left out while probing
 // mustn't shorten a full page, so enough are probed to fill it, and no more.
 func (h *Handler) probePage(ctx context.Context, start time.Time, p provider.Provider, releases []provider.Release, off, lim int) ([]probed, probeResult) {
+	// Right after the last release, they are all probed again, so the RSS
+	// feed knows if the last page was full of them. The page before read
+	// them, so the prober remembers them.
 	want := off + lim
-	if off < 0 || off >= len(releases) {
+	if off < 0 || off > len(releases) {
 		want = 0
 	}
 	deadline := time.Now().Add(cmp.Or(h.probeBudget, probeBudget))

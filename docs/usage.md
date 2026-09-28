@@ -102,7 +102,8 @@ section in `compose.yaml`. For the Linux service, set them in
 `GET /health` answers `OK` while magnetowid runs, without an API key, for
 monitoring. The container's health check uses it: `magnetowid -healthcheck`
 asks the magnetowid at `MAGNETOWID_LISTEN` and exits with 0 if it answers, and
-`docker ps` shows the result.
+`docker ps` shows the result. It can't see command-line flags, so in a container
+set the listen address with `MAGNETOWID_LISTEN`, not `-listen`.
 
 Sonarr/Radarr must be able to read the download directory. If they see it at a different path (e.g. in containers), add a Remote Path Mapping.
 

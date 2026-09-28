@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -163,7 +164,8 @@ func checkHealth(listen string) error {
 	if err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	// Straight to magnetowid, not through a proxy set for the sites.
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	resp, err := client.Get(u)
 	if err != nil {
 		return fmt.Errorf("health check: %w", err)
@@ -188,7 +190,7 @@ func healthURL(listen string) (string, error) {
 	case ip != nil && ip.IsUnspecified():
 		host = "::1"
 	}
-	return "http://" + net.JoinHostPort(host, port) + "/health", nil
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: "/health"}).String(), nil
 }
 
 func splitList(s string) []string {

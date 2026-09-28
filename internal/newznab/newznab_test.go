@@ -741,6 +741,22 @@ func TestRSSPlaceholderEndsFeed(t *testing.T) {
 	if guids := allGUIDs(t, srv, "100"); !slices.Equal(guids, []string{"fake:placeholder"}) {
 		t.Errorf("page past the end: %v", guids)
 	}
+
+	// Paging an item at a time ends: the placeholder comes once.
+	srv = newServer(t, &fakeRecentProvider{releases: manyReleases(2)})
+	var guids []string
+	for off := 0; off < 10; off++ {
+		items := parseFeed(t, get(t, srv, "/fake/api", rssSync(fmt.Sprint(off), "1")))
+		for _, it := range items {
+			guids = append(guids, it.GUID)
+		}
+		if len(items) < 1 {
+			break
+		}
+	}
+	if want := []string{"fake:r000", "fake:r001", "fake:placeholder"}; !slices.Equal(guids, want) {
+		t.Errorf("paging by 1: %v, want %v", guids, want)
+	}
 }
 
 func TestRSSKind(t *testing.T) {
