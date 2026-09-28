@@ -33,8 +33,10 @@ requires the proxy to omit this header and the client to ignore it if present.
 This failure happens during tunnel setup; disabling certificate verification
 does not fix it. A successful catalogue search does not establish FFmpeg
 compatibility. Verify a complete download with your installed versions before
-relying on this route. If it fails, use your VPN client's system tunnel or the
-[Linux network namespace setup](#linux-network-namespace).
+relying on this route. The [Privoxy workaround](#native-workaround-with-privoxy)
+keeps magnetowid and FFmpeg native while using Gluetun's HTTP proxy. Your VPN
+client's system tunnel and the [Linux network namespace setup](#linux-network-namespace)
+are also options.
 
 ### Configure Gluetun
 
@@ -56,6 +58,36 @@ This publishes Gluetun's proxy at `http://127.0.0.1:8888`. Magnetowid keeps
 running as a native application. If Gluetun runs on another machine, use an
 address reachable from magnetowid and restrict proxy access to your network.
 
+### Native workaround with Privoxy
+
+Install [Privoxy for your platform](https://www.privoxy.org/user-manual/installation.html).
+The connection path becomes `magnetowid / FFmpeg -> Privoxy -> Gluetun -> TVP`.
+Privoxy's [downgrade-http-version action](https://www.privoxy.org/user-manual/actions-file.html#DOWNGRADE-HTTP-VERSION)
+makes the CONNECT exchange use HTTP/1.0, avoiding Gluetun's chunked response.
+HTTPS traffic inside the tunnel stays encrypted and uses its original protocol.
+
+Download [privoxy.conf](privoxy.conf) and [gluetun.action](gluetun.action).
+Edit `confdir` and `logdir` for your Privoxy installation, and set the `forward`
+address to Gluetun's published proxy port. Use this configuration for a Privoxy
+instance dedicated to magnetowid. It forwards every destination through Gluetun;
+keep the catch-all forwarding rule and avoid direct-connection exceptions.
+
+For Linux packages using `/etc/privoxy/config` and `privoxy.service`:
+
+```sh
+sudo install -m 644 privoxy.conf /etc/privoxy/config
+sudo install -m 644 gluetun.action /etc/privoxy/gluetun.action
+sudo privoxy --config-test /etc/privoxy/config
+sudo systemctl enable privoxy
+sudo systemctl restart privoxy
+```
+
+On other platforms, select this configuration in Privoxy's service settings,
+or start it with `privoxy --no-daemon /path/to/privoxy.conf` (`privoxy.exe` on
+Windows). In the magnetowid settings below, use `http://127.0.0.1:8118` for all
+four proxy URLs. The additional native proxy process is the only extra runtime
+component; magnetowid and FFmpeg use their installed packages.
+
 ### Configure magnetowid
 
 Download [proxy.env](proxy.env) and edit the proxy address. Both magnetowid's
@@ -63,12 +95,14 @@ HTTP client and FFmpeg need the settings. Keep lowercase `http_proxy` set:
 FFmpeg uses it for HTTPS as well as HTTP. The `NO_PROXY` and `no_proxy` settings
 keep local requests direct.
 
-For a packaged Linux service, also download
-[magnetowid-proxy.conf](magnetowid-proxy.conf). Install the edited files:
+For a packaged Linux service, download
+[magnetowid-privoxy.conf](magnetowid-privoxy.conf) when using the workaround, or
+[magnetowid-proxy.conf](magnetowid-proxy.conf) for a direct Gluetun connection.
+Save the selected file as `proxy.conf` and install the edited files:
 
 ```sh
 sudo install -m 600 proxy.env /etc/magnetowid/proxy.env
-sudo install -Dm 644 magnetowid-proxy.conf /etc/systemd/system/magnetowid.service.d/proxy.conf
+sudo install -Dm 644 proxy.conf /etc/systemd/system/magnetowid.service.d/proxy.conf
 sudo systemctl daemon-reload
 sudo systemctl restart magnetowid
 ```
@@ -77,6 +111,13 @@ For Homebrew, Scoop, Nix, or archive installations, add the variables from
 `proxy.env` to the environment used to launch magnetowid, then restart it.
 FFmpeg inherits that environment. A shell's environment does not automatically
 apply to an existing background service.
+
+When switching from the namespace example, stop magnetowid and run
+`sudo systemctl disable --now magnetowid-gluetun`. Remove magnetowid's
+`vpn.conf` override, run `sudo systemctl daemon-reload`, and follow the proxy
+Compose setup above. Stopping the old container releases its published API
+port for the native magnetowid service.
+Set `MAGNETOWID_LISTEN=127.0.0.1:8484` if both Arr apps run on the same host.
 
 Sonarr and Radarr connect to magnetowid's usual API address and use its usual
 download directory. Follow [Connect and verify](#connect-and-verify), including

@@ -1,0 +1,4 @@
+# HTTP/1.0 CONNECT avoids Gluetun's chunked tunnel response.
+# HTTPS traffic inside the tunnel remains encrypted and unchanged.
+{ +downgrade-http-version }
+/

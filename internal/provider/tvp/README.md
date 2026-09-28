@@ -23,7 +23,9 @@ an override for the systemd service supplied by `.deb`, `.rpm`, and AUR packages
 
 Read the [FFmpeg proxy compatibility note](../../../examples/gluetun/README.md#ffmpeg-compatibility)
 before using the HTTP proxy: affected builds can search successfully but fail
-HTTPS downloads. Linux users can use the optional
+HTTPS downloads. The [Privoxy workaround](../../../examples/gluetun/README.md#native-workaround-with-privoxy)
+avoids the malformed tunnel response while keeping magnetowid and FFmpeg native.
+Linux users can also use the optional
 [network namespace setup](../../../examples/gluetun/README.md#linux-network-namespace)
 to route the native service through Gluetun without that proxy dependency.
 
