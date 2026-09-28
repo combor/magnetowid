@@ -39,6 +39,16 @@ Limitations:
 - Skyhook is Sonarr's own service, not a public API, and may change without
   notice.
 
+## Long soaps
+
+TVP keeps long soaps such as *M jak miłość*, *Klan* and *Barwy szczęścia* in
+blocks of 100 episode numbers, titled by range ("1801–1900", "1901–"), not in
+seasons. The blocks have nothing to do with TVDB's seasons: TVP's block 20 of
+*M jak miłość* starts at no. 1901, but TVDB's S20E01 is no. 1452. So vodarr
+never maps a TVDB season onto a block. It finds an episode of such a series
+only when Sonarr's episode number is TVP's own: in season 1, and in TVDB's
+*Klan* S15E2113.
+
 ## New episodes
 
 TVP has no list of new episodes, so vodarr watches the series Sonarr cares

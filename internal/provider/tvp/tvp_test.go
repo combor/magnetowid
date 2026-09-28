@@ -72,6 +72,12 @@ var fixtures = map[string]string{
 	"/vods/serials/600/seasons":              `[{"id":601,"number":1},{"id":602,"number":2}]`,
 	"/vods/serials/600/seasons/601/episodes": `[{"id":6011,"number":1}]`,
 	"/vods/serials/600/seasons/602/episodes": `[{"id":6021,"number":1},{"id":6022,"number":2}]`,
+	// "Setki": a soap kept in blocks of 100, like M jak miłość.
+	"/vods/search/SERIAL?keyword=Setki":        `{"items":[{"type":"SERIAL","id":1100,"title":"Setki"}]}`,
+	"/vods/serials/1100/seasons":               `[{"id":1101,"number":1,"title":"1–100"},{"id":1119,"number":19,"title":"1801–1900"},{"id":1120,"number":20,"title":"1901–"}]`,
+	"/vods/serials/1100/seasons/1101/episodes": `[{"id":11001,"number":1},{"id":11002,"number":2}]`,
+	"/vods/serials/1100/seasons/1119/episodes": `[{"id":11899,"number":1899},{"id":11900,"number":1900}]`,
+	"/vods/serials/1100/seasons/1120/episodes": `[{"id":11901,"number":1901},{"id":11902,"number":1902},{"id":11943,"number":1943}]`,
 	"/vods/search/VOD?keyword=Hydrozagadka": `{"items":[
 		{"type":"VOD","id":296079,"title":"Hydrozagadka","year":1970,"duration":4235,"payable":false,"since":"2020-09-23T11:20:00+02:00"},
 		{"type":"VOD","id":350232,"title":"Złote runo","year":1996,"duration":5000,"payable":false}]}`,
@@ -197,6 +203,11 @@ func TestEpisodeNumbering(t *testing.T) {
 		{"Pusty", 3, 5, ""},          // S3 restarts after S1; empty S2 in between
 		{"Absolutny", 5, 11, ""},     // not above season 4's highest
 		{"Absolutny", 1, 11, ""},     // listed twice
+		// Blocks of 100 aren't seasons.
+		{"Setki", 20, 1, ""},         // not 1901
+		{"Setki", 20, 0, ""},         // nor the whole block
+		{"Setki", 19, 1943, "11943"}, // an absolute number still is
+		{"Setki", 1, 2, "11002"},     // season 1 counts from the start, like block 1
 	}
 	for _, tt := range tests {
 		items, err := p.Search(context.Background(), provider.Query{Kind: provider.Episode, Title: tt.title, Season: tt.season, Episode: tt.episode})
@@ -211,6 +222,30 @@ func TestEpisodeNumbering(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Errorf("%s S%02dE%02d = %q, want %q", tt.title, tt.season, tt.episode, got, tt.want)
+		}
+	}
+}
+
+func TestHasBlocks(t *testing.T) {
+	tests := []struct {
+		titles []string
+		want   bool
+	}{
+		{[]string{"1–100", "101–200"}, true},
+		{[]string{"2901-3000"}, true},
+		{[]string{"782–800", "1901–"}, true},
+		{[]string{"1801–1829", "Odcinki specjalne"}, true},
+		{[]string{"Sezon 1", "Sezon 2", "Materiały"}, false},
+		{[]string{"Odcinki"}, false},
+		{[]string{""}, false},
+	}
+	for _, tt := range tests {
+		var seasons []product
+		for _, title := range tt.titles {
+			seasons = append(seasons, product{Title: title})
+		}
+		if got := hasBlocks(seasons); got != tt.want {
+			t.Errorf("hasBlocks(%q) = %v, want %v", tt.titles, got, tt.want)
 		}
 	}
 }

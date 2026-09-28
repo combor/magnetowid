@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -112,9 +113,14 @@ func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provide
 		if episodes, err = p.episodes(ctx, serial.ID, season.ID); err != nil {
 			return nil, err
 		}
-		items, err := p.bySeason(ctx, serial, seasons, q, episodes)
-		if err != nil || len(items) > 0 || q.Episode == 0 {
-			return items, err
+		// A block's position says nothing about TVDB's seasons: M jak
+		// miłość's block 20 starts at 1901, but TVDB's S20E1 is 1452. Only
+		// season 1 and a block starting at 1 both count from the first episode.
+		if !hasBlocks(seasons) || q.Season == 1 {
+			items, err := p.bySeason(ctx, serial, seasons, q, episodes)
+			if err != nil || len(items) > 0 || q.Episode == 0 {
+				return items, err
+			}
 		}
 	}
 	if q.Episode == 0 {
@@ -276,6 +282,21 @@ func (p *Provider) seasonStart(ctx context.Context, serialID int64, seasons []pr
 		return first, true, nil
 	}
 	return 0, false, nil
+}
+
+// blockTitle is the title of a season that TVP uses as a block of episode
+// numbers, e.g. "1–100", "801-900" or, for the latest, "1901–".
+var blockTitle = regexp.MustCompile(`^\s*\d+\s*[–-]\s*\d*\s*$`)
+
+// hasBlocks reports whether TVP keeps the serial's episodes in blocks of
+// numbers rather than seasons, as it does for long soaps.
+func hasBlocks(seasons []product) bool {
+	for _, s := range seasons {
+		if blockTitle.MatchString(s.Title) {
+			return true
+		}
+	}
+	return false
 }
 
 func findSeason(seasons []product, number int) (product, bool) {
