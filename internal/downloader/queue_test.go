@@ -7,9 +7,12 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -23,10 +26,11 @@ import (
 // fakeProvider can't be reached for the first offline resolves, then returns
 // err if set.
 type fakeProvider struct {
-	mu       sync.Mutex
-	resolves int
-	offline  int
-	err      error
+	mu        sync.Mutex
+	resolves  int
+	offline   int
+	err       error
+	subtitles []provider.Subtitle // every stream's
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
@@ -46,7 +50,7 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	if f.err != nil {
 		return provider.Stream{}, f.err
 	}
-	return provider.Stream{URL: fmt.Sprintf("http://example.invalid/%s/%d.m3u8", id, f.resolves)}, nil
+	return provider.Stream{URL: fmt.Sprintf("http://example.invalid/%s/%d.m3u8", id, f.resolves), Subtitles: f.subtitles}, nil
 }
 
 // fakeEngine fails the first fail calls and any stream URL containing failURL,
@@ -361,6 +365,57 @@ func TestShutdownRequeues(t *testing.T) {
 	}
 	if p.resolves != 1 {
 		t.Errorf("resolves = %d, want 1", p.resolves)
+	}
+}
+
+// Subtitles are saved beside the video as SRT. Subtitles that can't be had
+// are left out, and the video kept.
+func TestSubtitlesSaved(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/napisy.xml" {
+			http.NotFound(w, r)
+			return
+		}
+		io.WriteString(w, `<tt xmlns="http://www.w3.org/ns/ttml"><body><div>
+			<p begin="00:00:01.000" end="00:00:02.500">Dzień dobry.</p></div></body></tt>`)
+	}))
+	defer srv.Close()
+	p := &fakeProvider{subtitles: []provider.Subtitle{
+		{URL: srv.URL + "/napisy.xml", Format: provider.TTML, Language: "pol", SDH: true},
+		{URL: srv.URL + "/gone.xml", Format: provider.TTML, Language: "ukr"},
+	}}
+	q := startQueue(t, p, &fakeEngine{})
+	j := waitFinished(t, q, add(t, q, "Czas.honoru.S01E02", "tv", 0, nzb.Ref{Provider: "fake", ID: "1"}))
+	if j.Status != StatusCompleted {
+		t.Fatalf("job %s: %s", j.Status, j.Error)
+	}
+	entries, err := os.ReadDir(j.Storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if want := []string{"Czas.honoru.S01E02.mp4", "Czas.honoru.S01E02.pol.sdh.srt"}; !slices.Equal(names, want) {
+		t.Fatalf("files %v, want %v", names, want)
+	}
+	srt, _ := os.ReadFile(filepath.Join(j.Storage, "Czas.honoru.S01E02.pol.sdh.srt"))
+	if want := "1\n00:00:01,000 --> 00:00:02,500\nDzień dobry.\n\n"; string(srt) != want {
+		t.Errorf("SRT %q, want %q", srt, want)
+	}
+}
+
+func TestSubtitleName(t *testing.T) {
+	for want, s := range map[string]provider.Subtitle{
+		"Film.2020.pol.sdh.srt": {Language: "pol", SDH: true},
+		"Film.2020.ukr.srt":     {Language: "ukr"},
+		"Film.2020.srt":         {},
+		"Film.2020.a_b.srt":     {Language: "a/b"},
+	} {
+		if got := subtitleName("Film.2020", s); got != want {
+			t.Errorf("subtitleName(%+v) = %q, want %q", s, got, want)
+		}
 	}
 }
 

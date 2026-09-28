@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -86,7 +87,11 @@ var fixtures = map[string]string{
 		{"type":"VOD","id":1506041,"title":"Godland","originalTitle":"Vanskabte land","year":2022,"duration":8212}]}`,
 	"/296079/videos/playlist?videoType=MOVIE": `{"sources":{
 		"DASH":[{"src":"https://cdn.example/video.mpd"}],
-		"HLS":[{"src":"https://cdn.example/video-fmp4.m3u8"}]}}`,
+		"HLS":[{"src":"https://cdn.example/video-fmp4.m3u8"}]},
+		"subtitles":[
+			{"url":"https://s.tvp.pl/repository/attachment/c/b/c/sdh.xml","language":"POLISH_DLA_NIESLYSZACYCH","isoCode":"POL"},
+			{"url":"https://s.tvp.pl/repository/attachment/1/e/4/ua.xml","language":"UKR","isoCode":"UKR"},
+			{"url":"","language":"POLISH","isoCode":"POL"}]}`,
 	"/2612854/videos/playlist?videoType=MOVIE": `{"sources":{"HLS":[{"src":"https://cdn.example/drm.m3u8"}]},
 		"drm":{"WIDEVINE":{"src":"https://vod.tvp.pl/api/products/2612854/drm/widevine/external"}}}`,
 }
@@ -272,6 +277,13 @@ func TestResolve(t *testing.T) {
 	}
 	if s.URL != "https://cdn.example/video-fmp4.m3u8" || s.Header.Get("User-Agent") == "" {
 		t.Errorf("stream = %+v", s)
+	}
+	wantSubs := []provider.Subtitle{
+		{URL: "https://s.tvp.pl/repository/attachment/c/b/c/sdh.xml", Format: provider.TTML, Language: "pol", SDH: true},
+		{URL: "https://s.tvp.pl/repository/attachment/1/e/4/ua.xml", Format: provider.TTML, Language: "ukr"},
+	}
+	if !slices.Equal(s.Subtitles, wantSubs) {
+		t.Errorf("subtitles = %+v, want %+v", s.Subtitles, wantSubs)
 	}
 
 	for id, want := range map[string]string{

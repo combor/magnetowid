@@ -8,8 +8,6 @@ magnetowid needs no changes to either app: it looks like two things they already
 
 Supported sites: **TVP VOD** (`tvp`). See the [TVP VOD notes](../internal/provider/tvp/README.md).
 
-> Proof of concept: minimal features.
-
 ## Install and run
 
 ### Docker Compose
@@ -148,6 +146,15 @@ the films it watches for once the site has them:
   they are among the site's newest. Older ones need a search.
 - It's for sites whose notes say they support it.
 
+### Subtitles
+
+magnetowid saves the subtitles a site offers next to the video as SRT files,
+named after it with the language and `sdh` for the deaf and hard of hearing,
+e.g. `<release>.pol.sdh.srt`. Sonarr and Radarr import them only if you turn on
+**Import Extra Files** under Settings → Media Management (with **Show
+Advanced**), with `srt` among its extensions, which is the default. A download
+whose subtitles can't be fetched keeps the video, with a warning in the log.
+
 ### Pausing downloads
 
 magnetowid takes SABnzbd's pause and resume commands, for the whole queue or
@@ -231,7 +238,7 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 - **What can't be downloaded:** DRM-protected and paid content, and titles not available where magnetowid runs. magnetowid leaves them out of search results, and logs how many it left out with the site's reason for the first. A job can still fail if a title stops being available between the search and the download. Getting network access to region-restricted titles is up to the operator.
 - **Release details:**
   - A release's name gives the resolution and codecs of the best stream the site offers, which is the one magnetowid downloads, and the language of its audio if the stream gives it. magnetowid reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
-  - Only a single audio track is kept, and no subtitles.
+  - Only a single audio track is kept. The site's [subtitles](#subtitles) are saved as SRT; only TTML is converted so far.
 - **Restarts:** the queue, the history, and the series and films watched for new releases are saved in `.magnetowid-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one magnetowid can use it at a time.
 
 ## Adding a site
