@@ -17,6 +17,7 @@ import (
 
 	"github.com/combor/vodarr/internal/nzb"
 	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/vodarr/internal/store"
 )
 
 // fakeProvider can't be reached for the first offline resolves, then returns
@@ -128,14 +129,19 @@ func add(t *testing.T, q *Queue, name, category string, priority int, ref nzb.Re
 	return id
 }
 
-// newQueue opens a queue in dir and closes it when the test ends.
+// newQueue opens a queue and its database in dir, and closes the database
+// when the test ends. Tests close q.db to stop saving, or to reopen dir.
 func newQueue(t *testing.T, dir string, p provider.Provider, e Engine) *Queue {
 	t.Helper()
-	q, err := New(dir, provider.NewRegistry(p), e, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	db, err := store.Open(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { q.Close() })
+	t.Cleanup(func() { db.Close() })
+	q, err := New(dir, db, provider.NewRegistry(p), e, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
 	return q
 }
 
@@ -368,7 +374,7 @@ func TestJobsPersist(t *testing.T) {
 	gone := waitFinished(t, q, add(t, q, "Other", "movies", 0, ref))
 	q.Delete(gone.ID, true)
 	stop()
-	q.Close()
+	q.db.Close()
 	// As if the importer had moved the file out.
 	if err := os.RemoveAll(done.Storage); err != nil {
 		t.Fatal(err)
@@ -400,7 +406,7 @@ func TestInterruptedJobResumes(t *testing.T) {
 	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
 	<-e.started
 	stop()
-	q.Close()
+	q.db.Close()
 
 	q = newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
 	if jobs := q.Jobs(); len(jobs) != 1 || jobs[0].Status != StatusQueued || jobs[0].Attempts != 0 {
@@ -420,7 +426,7 @@ func TestCrashedJobIsQueued(t *testing.T) {
 	run(t, q)
 	add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
 	<-e.started
-	q.Close() // as if vodarr died mid-download
+	q.db.Close() // as if vodarr died mid-download
 
 	q2 := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
 	if jobs := q2.Jobs(); len(jobs) != 1 || jobs[0].Status != StatusQueued || jobs[0].Attempts != 0 {
@@ -440,16 +446,6 @@ func TestNewRemovesLeftoverWork(t *testing.T) {
 	newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
 	if _, err := os.Stat(filepath.Join(dir, incompleteDir)); !os.IsNotExist(err) {
 		t.Errorf("leftover work not removed: %v", err)
-	}
-}
-
-// A second vodarr on the same folder fails instead of waiting for the lock.
-func TestDatabaseInUse(t *testing.T) {
-	dir := t.TempDir()
-	newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
-	_, err := New(dir, provider.NewRegistry(&fakeProvider{}), &fakeEngine{}, slog.New(slog.DiscardHandler))
-	if err == nil || !strings.Contains(err.Error(), "in use by another vodarr") {
-		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -474,7 +470,7 @@ func TestPruneOldHistory(t *testing.T) {
 	q.mu.Lock()
 	q.prune(now)
 	q.mu.Unlock()
-	q.Close()
+	q.db.Close()
 
 	q = newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
 	var ids []string
@@ -519,7 +515,7 @@ func TestPriorityOrder(t *testing.T) {
 func TestUnsavedChangesAreRefused(t *testing.T) {
 	q := newQueue(t, t.TempDir(), &fakeProvider{}, &fakeEngine{})
 	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
-	q.Close() // every database write fails from here on
+	q.db.Close() // every database write fails from here on
 	if _, err := q.Add("b", "b.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "b"}); err == nil {
 		t.Error("Add succeeded without saving")
 	}

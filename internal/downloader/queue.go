@@ -114,10 +114,10 @@ type outage struct {
 	until time.Time
 }
 
-// New opens the queue that downloads into dir, which must be absolute, with
-// the jobs saved there. Close it when done.
-func New(dir string, providers *provider.Registry, engine Engine, log *slog.Logger) (*Queue, error) {
-	db, jobs, err := openDB(dir)
+// New returns the queue that downloads into dir, which must be absolute, and
+// saves its jobs in db. Close db only after Run has returned.
+func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, log *slog.Logger) (*Queue, error) {
+	jobs, err := loadJobs(db)
 	if err != nil {
 		return nil, err
 	}

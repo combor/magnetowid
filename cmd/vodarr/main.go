@@ -23,6 +23,7 @@ import (
 	"github.com/combor/vodarr/internal/provider"
 	"github.com/combor/vodarr/internal/provider/tvp"
 	"github.com/combor/vodarr/internal/sabnzbd"
+	"github.com/combor/vodarr/internal/store"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -66,17 +67,27 @@ func run(log *slog.Logger) error {
 		return fmt.Errorf("ffmpeg not found: %w", err)
 	}
 
-	// Add new sites here.
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	providers := provider.NewRegistry(
-		tvp.New(httpClient, log),
-	)
-
-	queue, err := downloader.New(dir, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)
+	// Closed last, after the server and the worker have stopped writing.
+	db, err := store.Open(dir)
 	if err != nil {
 		return err
 	}
-	defer queue.Close()
+	defer db.Close()
+
+	// Add new sites here.
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	tvpProvider, err := tvp.New(httpClient, log, db)
+	if err != nil {
+		return err
+	}
+	providers := provider.NewRegistry(
+		tvpProvider,
+	)
+
+	queue, err := downloader.New(dir, db, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)
+	if err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
 	prober := &probe.Prober{Client: httpClient}
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Probe: prober, Log: log})

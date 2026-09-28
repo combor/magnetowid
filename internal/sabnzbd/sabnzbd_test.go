@@ -11,12 +11,16 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	bolt "go.etcd.io/bbolt"
 
 	"github.com/combor/vodarr/internal/downloader"
 	"github.com/combor/vodarr/internal/nzb"
 	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/vodarr/internal/store"
 )
 
 type fakeProvider struct{}
@@ -38,12 +42,28 @@ func (fakeEngine) Download(_ context.Context, _ provider.Stream, out string, pro
 
 func newServer(t *testing.T, runWorker bool) (*httptest.Server, *downloader.Queue) {
 	t.Helper()
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-	q, err := downloader.New(t.TempDir(), provider.NewRegistry(fakeProvider{}), fakeEngine{}, log)
+	return newServerOn(t, openDB(t), runWorker)
+}
+
+// openDB opens a database in a temporary folder until the test ends.
+func openDB(t *testing.T) *bolt.DB {
+	t.Helper()
+	db, err := store.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { q.Close() })
+	t.Cleanup(func() { db.Close() })
+	return db
+}
+
+// newServerOn is newServer with the queue's jobs saved in db.
+func newServerOn(t *testing.T, db *bolt.DB, runWorker bool) (*httptest.Server, *downloader.Queue) {
+	t.Helper()
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	q, err := downloader.New(filepath.Dir(db.Path()), db, provider.NewRegistry(fakeProvider{}), fakeEngine{}, log)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if runWorker {
 		ctx, cancel := context.WithCancel(context.Background())
 		done := make(chan struct{})
@@ -245,9 +265,10 @@ func TestHistoryAndDelete(t *testing.T) {
 
 // When a change can't be saved, the *arr is told it failed.
 func TestUnsavedChangesFail(t *testing.T) {
-	srv, q := newServer(t, false)
+	db := openDB(t)
+	srv, q := newServerOn(t, db, false)
 	id := addFile(t, srv, "A.nzb", vodarrNZB(t))["nzo_ids"].([]any)[0].(string)
-	q.Close() // every database write fails from here on
+	db.Close() // every database write fails from here on
 	if out := addFile(t, srv, "B.nzb", vodarrNZB(t)); out["status"] != false {
 		t.Errorf("addfile = %v", out)
 	}

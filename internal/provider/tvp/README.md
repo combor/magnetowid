@@ -17,8 +17,10 @@ which Sonarr runs before its search by title:
    TVDB ID or, if Wikidata doesn't have that, its IMDb ID.
 2. It searches TVP with the Polish title and names the releases with Sonarr's
    title, so Sonarr imports them automatically.
-3. If a lookup fails, or the Polish title is the same as Sonarr's, it returns
-   nothing and Sonarr searches by its title as before.
+3. If the Polish title finds nothing, it searches TVP with Sonarr's title.
+   Series such as *Ranczo* have the same title in both.
+4. If a lookup fails, it returns nothing and Sonarr searches by its title as
+   before.
 
 vodarr keeps the titles it looks up for a day, and retries a failed lookup after
 5 minutes.
@@ -36,3 +38,28 @@ Limitations:
   matches TVP's.
 - Skyhook is Sonarr's own service, not a public API, and may change without
   notice.
+
+## New episodes
+
+TVP has no list of new episodes, so vodarr watches the series Sonarr cares
+about:
+
+- **Watch list:** when Sonarr searches by TVDB ID and vodarr finds the series
+  on TVP, vodarr watches it, even if the episode isn't there yet. The list is
+  kept in `.vodarr-jobs.db` and survives restarts. Series stay on it.
+- **Air dates:** for each watched series, vodarr takes from Skyhook the
+  episodes that aired in the last 14 days, or are due in the next day, and
+  searches TVP for each, as Sonarr would. It never maps a TVP episode back to
+  Sonarr's numbering: TVP's *M jak miłość* no. 1943, in TVP's season 20, is
+  TVDB's S27E07, and would otherwise be named S20E43.
+- **Background updates:** the feed is rebuilt in the background at most every
+  10 minutes, so RSS sync never waits for TVP. The first RSS sync after vodarr
+  starts gets the placeholder.
+- **Early premieres:** TVP lists some episodes a few days before broadcast as
+  paid premieres, and makes them free at broadcast. vodarr offers an episode
+  only once it is free, dated when vodarr first found it.
+- **Response cache:** vodarr keeps TVP's search results, season lists and
+  episode lists for 10 minutes. This serves the feed, and the per-episode
+  searches Sonarr runs when a season search finds nothing. Stream URLs aren't
+  kept: TVP ties them to the requesting IP address.
+

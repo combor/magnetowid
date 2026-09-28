@@ -74,6 +74,20 @@ type TVDBSearcher interface {
 	SearchTVDB(ctx context.Context, tvdbID int, q Query) (title string, items []Item, err error)
 }
 
+// Release is an Item with the *arr's title, which names the release.
+type Release struct {
+	Title string
+	Item
+}
+
+// RecentLister is a Provider that offers new releases to RSS sync, which is
+// how Sonarr and Radarr find new episodes and films without searching.
+type RecentLister interface {
+	// Recent returns new releases of the kind. It must return quickly: RSS
+	// sync has a timeout, and errors count against the indexer.
+	Recent(ctx context.Context, kind Kind) ([]Release, error)
+}
+
 // ErrUnavailable marks content that can't be downloaded (DRM, geo-blocked,
 // paid). It is not retried.
 var ErrUnavailable = errors.New("content unavailable")

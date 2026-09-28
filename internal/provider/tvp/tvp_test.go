@@ -86,6 +86,13 @@ var fixtures = map[string]string{
 
 func newProvider(t *testing.T) *Provider {
 	t.Helper()
+	return newProviderWith(t, nil)
+}
+
+// newProviderWith is newProvider whose TVP answers with serve's body when it
+// has one for the path and query, and fails with HTTP 500 if that is "500".
+func newProviderWith(t *testing.T, serve func(key string) (string, bool)) *Provider {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		q := r.URL.Query()
 		if q.Get("lang") != "pl" || q.Get("platform") != "BROWSER" {
@@ -107,6 +114,15 @@ func newProvider(t *testing.T) *Provider {
 			return
 		}
 		body, ok := fixtures[key]
+		if serve != nil {
+			if b, found := serve(key); found {
+				body, ok = b, true
+			}
+		}
+		if body == "500" {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		if !ok {
 			io.WriteString(w, `{"items":[]}`)
 			return
@@ -114,7 +130,10 @@ func newProvider(t *testing.T) *Provider {
 		io.WriteString(w, body)
 	}))
 	t.Cleanup(srv.Close)
-	p := New(srv.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	p, err := New(srv.Client(), slog.New(slog.NewTextHandler(io.Discard, nil)), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	p.baseURL = srv.URL
 	return p
 }
