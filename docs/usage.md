@@ -97,6 +97,13 @@ section in `compose.yaml`. For the Linux service, set them in
 | `-download-dir` | `MAGNETOWID_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the database of jobs and of the series and films watched for new releases to `<dir>/.magnetowid-jobs.db` |
 | `-categories` | `MAGNETOWID_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `MAGNETOWID_FFMPEG` | `ffmpeg` | ffmpeg binary |
+| `-log-level` | `MAGNETOWID_LOG_LEVEL` | `info` | `debug` also logs each request, RSS sync and rebuild of a site's feeds; `warn` and `error` log less |
+
+`GET /health` answers `OK` while magnetowid runs, without an API key, for
+monitoring. The container's health check uses it: `magnetowid -healthcheck`
+asks the magnetowid at `MAGNETOWID_LISTEN` and exits with 0 if it answers, and
+`docker ps` shows the result. It can't see command-line flags, so in a container
+set the listen address with `MAGNETOWID_LISTEN`, not `-listen`.
 
 Sonarr/Radarr must be able to read the download directory. If they see it at a different path (e.g. in containers), add a Remote Path Mapping.
 
@@ -107,12 +114,18 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - Host and port: magnetowid's host and port.
    - API key: the one magnetowid was started with.
    - Category: `tv` (Sonarr) or `movies` (Radarr).
-   - Priority settings (optional): magnetowid downloads one job at a time and starts higher-priority jobs first. Paused counts as Low.
+   - Priority settings (optional): magnetowid downloads one job at a time and starts higher-priority jobs first. Paused adds the job paused: see [Pausing downloads](#pausing-downloads).
 2. **Indexer:** Settings → Indexers → **Newznab**, one per site.
    - Name: e.g. "TVP VOD".
    - URL: `http://<host>:8484/tvp`, API path `/api`, the same API key.
    - Categories: 5000, 5040 (Sonarr) or 2000, 2040 (Radarr).
    - **Download Client:** set it to the client from step 1, so magnetowid releases never go to a real Usenet client.
+3. **Language (Radarr):** Radarr's quality profiles want a film's original language
+   by default, and turn down releases in another. A release's name gives the
+   language of its audio, which on TVP is Polish, voice-over included, so Radarr
+   turns down foreign films from TVP. In the quality profile Radarr uses
+   (Settings → Profiles), set **Language** to **Any**, or to **Polish** for films
+   in Polish only. Sonarr's profiles have no language.
 
 The test buttons should pass for both. When a site has nothing new to offer,
 its feed holds a placeholder item, which is never grabbed, because the indexer
@@ -134,6 +147,23 @@ the films it watches for once the site has them:
 - The feed covers episodes that aired in the last 14 days, and films while
   they are among the site's newest. Older ones need a search.
 - It's for sites whose notes say they support it.
+
+### Pausing downloads
+
+magnetowid takes SABnzbd's pause and resume commands, for the whole queue or
+single jobs. Sonarr and Radarr show paused jobs, but can't pause or resume
+them, so send the commands yourself, e.g. with curl:
+
+```sh
+curl 'http://localhost:8484/api?mode=pause&apikey=YOUR_API_KEY'
+curl 'http://localhost:8484/api?mode=resume&apikey=YOUR_API_KEY'
+curl 'http://localhost:8484/api?mode=queue&name=resume&value=JOB_ID&apikey=YOUR_API_KEY'
+```
+
+`mode=queue&apikey=YOUR_API_KEY` lists the jobs with their IDs (`nzo_id`);
+`name=pause` pauses the jobs in `value`, separated by commas. A download that
+is running when paused starts again from the beginning once resumed. Pauses
+survive restarts.
 
 ## Docker networking and shared downloads
 
@@ -181,7 +211,9 @@ To inspect recent container messages:
 docker compose logs --tail 100 magnetowid
 ```
 
-For the Linux service, use `journalctl -u magnetowid -n 100`.
+For the Linux service, use `journalctl -u magnetowid -n 100`. To see each
+request from Sonarr/Radarr and what each RSS sync offered, set
+`MAGNETOWID_LOG_LEVEL=debug`.
 
 For bugs or feature requests, [open an issue](https://github.com/combor/magnetowid/issues).
 Include the steps to reproduce and any relevant error message, with API keys removed.
@@ -198,7 +230,7 @@ Include the steps to reproduce and any relevant error message, with API keys rem
   say how it is. TVP's long soaps are found this way.
 - **What can't be downloaded:** DRM-protected and paid content, and titles not available where magnetowid runs. magnetowid leaves them out of search results, and logs how many it left out with the site's reason for the first. A job can still fail if a title stops being available between the search and the download. Getting network access to region-restricted titles is up to the operator.
 - **Release details:**
-  - A release's name gives the resolution and codecs of the best stream the site offers, which is the one magnetowid downloads. magnetowid reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
+  - A release's name gives the resolution and codecs of the best stream the site offers, which is the one magnetowid downloads, and the language of its audio if the stream gives it. magnetowid reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
   - Only a single audio track is kept, and no subtitles.
 - **Restarts:** the queue, the history, and the series and films watched for new releases are saved in `.magnetowid-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one magnetowid can use it at a time.
 
@@ -223,6 +255,13 @@ libx264 encoder to run the download-engine tests. `make docker-smoke` builds the
 container and checks startup and both APIs. `make package-smoke` builds the
 Linux packages with GoReleaser and checks that each installs, runs and uninstalls
 as a systemd service in Debian, Fedora and Arch containers.
+
+`make integration` runs magnetowid with Sonarr and Radarr in containers, and
+fakes of the sites it reads, and checks that they grab and import what they find
+by search and by RSS sync. It needs Linux, Docker and ffmpeg with libx264; the
+apps look series and films up on their own servers. `make live` checks the real
+TVP API, Skyhook and Wikidata for what magnetowid reads from them; CI runs it
+daily.
 
 ## License
 

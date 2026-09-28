@@ -4,6 +4,7 @@ package newznab
 import (
 	"cmp"
 	"context"
+	"crypto/subtle"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -68,8 +69,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	t := q.Get("t")
-	// caps is public, as on most Newznab indexers.
-	if t != "caps" && q.Get("apikey") != h.APIKey {
+	// caps is public, as on most Newznab indexers. The key is compared in
+	// constant time, so response times don't give it away.
+	if t != "caps" && subtle.ConstantTimeCompare([]byte(q.Get("apikey")), []byte(h.APIKey)) != 1 {
 		writeError(w, 100, "Incorrect user credentials")
 		return
 	}
@@ -149,8 +151,11 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 }
 
 // rss serves RSS sync and the indexer test: the provider's new releases,
-// newest first. The indexer test fails on an empty feed, so a placeholder
-// stands in when there are none; being unparseable, it is never grabbed.
+// newest first, then a placeholder. Being unparseable, it is never grabbed.
+// The indexer test fails on an empty feed, which the placeholder stands in
+// for. And Sonarr warns of a gap in the feed unless it finds again the
+// release it saw newest last time, which is the placeholder if the feed held
+// nothing else.
 func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provider, movie bool, start time.Time) {
 	kind := provider.Episode
 	if movie {
@@ -184,13 +189,13 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provide
 	h.feeds.update(feed, releases, pg, res, cur.began)
 	h.Log.Debug("rss", "provider", p.Name(), "kind", kind, "offset", off, "releases", len(releases),
 		"results", len(pg), "unavailable", res.unavailable, "unreadable", res.unreadable)
-	if len(pg) == 0 && off == 0 {
-		writeXML(w, h.feed(p, []item{h.placeholder(r, p, movie)}))
-		return
-	}
-	items := make([]item, 0, len(pg))
+	items := make([]item, 0, len(pg)+1)
 	for _, rel := range pg {
 		items = append(items, h.release(r, p, provider.Query{Kind: rel.Kind, Title: rel.Title}, rel.Item, rel.info))
+	}
+	// Once, after the last release that can be read, so paging ends.
+	if n := len(res.read); off <= n && n < off+lim {
+		items = append(items, h.placeholder(r, p, movie))
 	}
 	writeXML(w, h.feed(p, items))
 }
@@ -200,8 +205,11 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provide
 // next offset whenever a page is full. Releases left out while probing
 // mustn't shorten a full page, so enough are probed to fill it, and no more.
 func (h *Handler) probePage(ctx context.Context, start time.Time, p provider.Provider, releases []provider.Release, off, lim int) ([]probed, probeResult) {
+	// Right after the last release, they are all probed again, so the RSS
+	// feed knows if the last page was full of them. The page before read
+	// them, so the prober remembers them.
 	want := off + lim
-	if off < 0 || off >= len(releases) {
+	if off < 0 || off > len(releases) {
 		want = 0
 	}
 	deadline := time.Now().Add(cmp.Or(h.probeBudget, probeBudget))

@@ -7,8 +7,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -30,21 +33,30 @@ import (
 var version = "dev"
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if err := run(log); err != nil {
+	level := new(slog.LevelVar)
+	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	if err := run(log, level); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(log *slog.Logger) error {
+func run(log *slog.Logger, level *slog.LevelVar) error {
 	listen := flag.String("listen", envOr("MAGNETOWID_LISTEN", ":8484"), "listen address")
 	apiKey := flag.String("api-key", os.Getenv("MAGNETOWID_API_KEY"), "API key for both APIs (required)")
 	downloadDir := flag.String("download-dir", os.Getenv("MAGNETOWID_DOWNLOAD_DIR"), "where finished downloads go (required)")
 	categories := flag.String("categories", envOr("MAGNETOWID_CATEGORIES", "tv,movies"), "comma-separated download categories")
 	ffmpeg := flag.String("ffmpeg", envOr("MAGNETOWID_FFMPEG", "ffmpeg"), "ffmpeg binary")
+	logLevel := flag.String("log-level", envOr("MAGNETOWID_LOG_LEVEL", "info"), "log level: debug, info, warn or error")
+	healthcheck := flag.Bool("healthcheck", false, "ask the magnetowid at the listen address whether it is healthy, and exit")
 	flag.Parse()
 
+	if *healthcheck {
+		return checkHealth(*listen)
+	}
+	if err := level.UnmarshalText([]byte(*logLevel)); err != nil {
+		return fmt.Errorf("-log-level: %w", err)
+	}
 	if *apiKey == "" || *downloadDir == "" {
 		flag.Usage()
 		return errors.New("-api-key and -download-dir are required")
@@ -92,6 +104,8 @@ func run(log *slog.Logger) error {
 	prober := &probe.Prober{Client: httpClient}
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Probe: prober, Log: log})
 	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})
+	// For health checks, so it needs no API key.
+	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "OK\n") })
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -131,13 +145,52 @@ func run(log *slog.Logger) error {
 	return serveErr
 }
 
-// logRequests logs requests without the query string, which holds the API key.
+// logRequests logs requests without the query string, which holds the API
+// key, and without health checks, which would drown the others.
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		log.Debug("request", "method", r.Method, "path", r.URL.Path, "t", q.Get("t"), "mode", q.Get("mode"))
+		if r.URL.Path != "/health" {
+			q := r.URL.Query()
+			log.Debug("request", "method", r.Method, "path", r.URL.Path, "t", q.Get("t"), "mode", q.Get("mode"))
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// checkHealth asks the magnetowid listening on listen whether it is healthy,
+// for the container's health check.
+func checkHealth(listen string) error {
+	u, err := healthURL(listen)
+	if err != nil {
+		return err
+	}
+	// Straight to magnetowid, not through a proxy set for the sites.
+	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
+	resp, err := client.Get(u)
+	if err != nil {
+		return fmt.Errorf("health check: %w", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("health check: HTTP %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// healthURL is the health endpoint of the magnetowid listening on listen,
+// over loopback if it listens on every address.
+func healthURL(listen string) (string, error) {
+	host, port, err := net.SplitHostPort(listen)
+	if err != nil {
+		return "", fmt.Errorf("-listen: %w", err)
+	}
+	switch ip := net.ParseIP(host); {
+	case host == "" || (ip != nil && ip.Equal(net.IPv4zero)):
+		host = "127.0.0.1"
+	case ip != nil && ip.IsUnspecified():
+		host = "::1"
+	}
+	return (&url.URL{Scheme: "http", Host: net.JoinHostPort(host, port), Path: "/health"}).String(), nil
 }
 
 func splitList(s string) []string {

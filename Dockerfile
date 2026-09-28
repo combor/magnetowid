@@ -40,5 +40,9 @@ COPY LICENSE /usr/share/licenses/magnetowid/LICENSE
 ENV MAGNETOWID_DOWNLOAD_DIR=/downloads
 EXPOSE 8484
 
+# Asks magnetowid at MAGNETOWID_LISTEN. Checks every 2 s while it starts.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --start-interval=2s \
+    CMD ["/usr/local/bin/magnetowid", "-healthcheck"]
+
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/magnetowid"]

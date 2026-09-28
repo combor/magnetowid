@@ -40,6 +40,18 @@ func TestContainerServesAPIs(t *testing.T) {
 	addr, _, _ := strings.Cut(docker(ctx, t, "port", id, "8484/tcp"), "\n")
 	checkAPIs(ctx, t, "http://"+addr, apiKey, "/downloads") // the image default
 
+	// The image's health check runs `magnetowid -healthcheck`.
+	for {
+		status := docker(ctx, t, "inspect", "-f", "{{.State.Health.Status}}", id)
+		if status == "healthy" {
+			break
+		}
+		if status == "unhealthy" || ctx.Err() != nil {
+			t.Fatalf("health status %q: %s", status, docker(ctx, t, "inspect", "-f", "{{json .State.Health.Log}}", id))
+		}
+		time.Sleep(time.Second)
+	}
+
 	// LookPath at startup only proves ffmpeg exists; this proves it runs.
 	if out := docker(ctx, t, "exec", id, "ffmpeg", "-hide_banner", "-version"); !strings.HasPrefix(out, "ffmpeg version") {
 		t.Errorf("ffmpeg -version printed %q", out)
@@ -84,6 +96,10 @@ func checkAPIs(ctx context.Context, t *testing.T, base, apiKey, downloadDir stri
 		t.Errorf("Newznab caps: %v", err)
 	} else if !strings.Contains(string(caps), "<caps>") {
 		t.Errorf("Newznab caps returned %q", caps)
+	}
+
+	if health, err := get(ctx, base+"/health"); err != nil || string(health) != "OK\n" {
+		t.Errorf("health: %q, %v", health, err)
 	}
 }
 
