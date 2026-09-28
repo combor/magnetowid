@@ -119,6 +119,12 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - URL: `http://<host>:8484/tvp`, API path `/api`, the same API key.
    - Categories: 5000, 5040 (Sonarr) or 2000, 2040 (Radarr).
    - **Download Client:** set it to the client from step 1, so magnetowid releases never go to a real Usenet client.
+3. **Language (Radarr):** Radarr's quality profiles want a film's original language
+   by default, and turn down releases in another. A release's name gives the
+   language of its audio, which on TVP is Polish, voice-over included, so Radarr
+   turns down foreign films from TVP. In the quality profile Radarr uses
+   (Settings → Profiles), set **Language** to **Any**, or to **Polish** for films
+   in Polish only. Sonarr's profiles have no language.
 
 The test buttons should pass for both. When a site has nothing new to offer,
 its feed holds a placeholder item, which is never grabbed, because the indexer
@@ -223,7 +229,7 @@ Include the steps to reproduce and any relevant error message, with API keys rem
   say how it is. TVP's long soaps are found this way.
 - **What can't be downloaded:** DRM-protected and paid content, and titles not available where magnetowid runs. magnetowid leaves them out of search results, and logs how many it left out with the site's reason for the first. A job can still fail if a title stops being available between the search and the download. Getting network access to region-restricted titles is up to the operator.
 - **Release details:**
-  - A release's name gives the resolution and codecs of the best stream the site offers, which is the one magnetowid downloads. magnetowid reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
+  - A release's name gives the resolution and codecs of the best stream the site offers, which is the one magnetowid downloads, and the language of its audio if the stream gives it. magnetowid reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
   - Only a single audio track is kept, and no subtitles.
 - **Restarts:** the queue, the history, and the series and films watched for new releases are saved in `.magnetowid-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one magnetowid can use it at a time.
 
@@ -248,6 +254,13 @@ libx264 encoder to run the download-engine tests. `make docker-smoke` builds the
 container and checks startup and both APIs. `make package-smoke` builds the
 Linux packages with GoReleaser and checks that each installs, runs and uninstalls
 as a systemd service in Debian, Fedora and Arch containers.
+
+`make integration` runs magnetowid with Sonarr and Radarr in containers, and
+fakes of the sites it reads, and checks that they grab and import what they find
+by search and by RSS sync. It needs Linux, Docker and ffmpeg with libx264; the
+apps look series and films up on their own servers. `make live` checks the real
+TVP API, Skyhook and Wikidata for what magnetowid reads from them; CI runs it
+daily.
 
 ## License
 

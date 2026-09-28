@@ -73,6 +73,26 @@ jobs:
           MAGNETOWID_SMOKE_IMAGE: magnetowid:ci
         run: go test -count=1 -run TestContainerServesAPIs ./cmd/magnetowid
 
+  integration:
+    name: Sonarr & Radarr Integration Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Install ffmpeg to make the test stream
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -hide_banner -encoders | grep -w libx264
+      # Pulls the pinned Sonarr and Radarr images, runs them with magnetowid
+      # and fakes of the sites it reads, and checks what they grab and import.
+      - name: Run magnetowid with Sonarr and Radarr
+        run: make integration
+
   package-smoke:
     name: Package Smoke Test
     runs-on: ubuntu-latest
@@ -100,6 +120,7 @@ jobs:
       - test
       - govulncheck
       - container-smoke
+      - integration
       - package-smoke
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
