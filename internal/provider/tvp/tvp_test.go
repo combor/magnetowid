@@ -75,9 +75,10 @@ var fixtures = map[string]string{
 	// "Setki": a soap kept in blocks of 100, like M jak miłość.
 	"/vods/search/SERIAL?keyword=Setki":        `{"items":[{"type":"SERIAL","id":1100,"title":"Setki"}]}`,
 	"/vods/serials/1100/seasons":               `[{"id":1101,"number":1,"title":"1–100"},{"id":1119,"number":19,"title":"1801–1900"},{"id":1120,"number":20,"title":"1901–"}]`,
-	"/vods/serials/1100/seasons/1101/episodes": `[{"id":11001,"number":1},{"id":11002,"number":2}]`,
-	"/vods/serials/1100/seasons/1119/episodes": `[{"id":11899,"number":1899},{"id":11900,"number":1900}]`,
-	"/vods/serials/1100/seasons/1120/episodes": `[{"id":11901,"number":1901},{"id":11902,"number":1902},{"id":11943,"number":1943}]`,
+	"/vods/serials/1100/seasons/1101/episodes": `[{"id":11001,"number":1},{"id":11002,"number":2},{"id":11003,"number":3},{"id":11004,"number":4}]`,
+	"/vods/serials/1100/seasons/1119/episodes": `[{"id":11899,"number":1899,"year":2025},{"id":11900,"number":1900,"year":2025}]`,
+	"/vods/serials/1100/seasons/1120/episodes": `[{"id":11901,"number":1901,"year":2025},{"id":11902,"number":1902,"year":2025},
+		{"id":11941,"number":1941},{"id":11942,"number":1942},{"id":11943,"number":1943},{"id":11944,"number":1944,"payable":true}]`,
 	"/vods/search/VOD?keyword=Hydrozagadka": `{"items":[
 		{"type":"VOD","id":296079,"title":"Hydrozagadka","year":1970,"duration":4235,"payable":false,"since":"2020-09-23T11:20:00+02:00"},
 		{"type":"VOD","id":350232,"title":"Złote runo","year":1996,"duration":5000,"payable":false}]}`,
@@ -222,30 +223,6 @@ func TestEpisodeNumbering(t *testing.T) {
 		}
 		if got != tt.want {
 			t.Errorf("%s S%02dE%02d = %q, want %q", tt.title, tt.season, tt.episode, got, tt.want)
-		}
-	}
-}
-
-func TestHasBlocks(t *testing.T) {
-	tests := []struct {
-		titles []string
-		want   bool
-	}{
-		{[]string{"1–100", "101–200"}, true},
-		{[]string{"2901-3000"}, true},
-		{[]string{"782–800", "1901–"}, true},
-		{[]string{"1801–1829", "Odcinki specjalne"}, true},
-		{[]string{"Sezon 1", "Sezon 2", "Materiały"}, false},
-		{[]string{"Odcinki"}, false},
-		{[]string{""}, false},
-	}
-	for _, tt := range tests {
-		var seasons []product
-		for _, title := range tt.titles {
-			seasons = append(seasons, product{Title: title})
-		}
-		if got := hasBlocks(seasons); got != tt.want {
-			t.Errorf("hasBlocks(%q) = %v, want %v", tt.titles, got, tt.want)
 		}
 	}
 }

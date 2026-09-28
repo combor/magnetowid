@@ -45,9 +45,34 @@ TVP keeps long soaps such as *M jak miłość*, *Klan* and *Barwy szczęścia* i
 blocks of 100 episode numbers, titled by range ("1801–1900", "1901–"), not in
 seasons. The blocks have nothing to do with TVDB's seasons: TVP's block 20 of
 *M jak miłość* starts at no. 1901, but TVDB's S20E01 is no. 1452. So vodarr
-never maps a TVDB season onto a block. It finds an episode of such a series
-only when Sonarr's episode number is TVP's own: in season 1, and in TVDB's
-*Klan* S15E2113.
+never maps a TVDB season onto a block. It finds an episode by TVP's number
+for it, when Sonarr searches by TVDB ID. The number comes from:
+
+- **TVP's TV guide:** it lists each broadcast on TVP 1 and TVP 2 with its
+  number ("M jak miłość - odc. 1943"). vodarr looks for the broadcast within
+  an hour of TVDB's air time, and takes the newest if reruns air nearby. The
+  guide keeps about three weeks, so it numbers the recent episodes, which the
+  new-episode feed needs. vodarr asks it only when searching a season with
+  recent episodes, so older seasons don't depend on it.
+- **TVDB's absolute number,** and a TVDB episode title that is only the
+  number ("Odcinek 1452", "1945"). They number older episodes.
+- **Season 1's episode numbers,** as season 1 counts from the first episode.
+
+TVDB's numbers are patchy and sometimes wrong, so vodarr uses a number only
+if its sources agree, no other episode has it, and a neighbouring episode of
+the same TVDB season has a number at the same offset. It also skips an
+episode whose year on TVP is more than 2 years from TVDB's air date.
+
+Limitations:
+
+- Episodes that neither the guide nor TVDB numbers aren't found. That
+  includes all of *M jak miłość*'s season 26 (2025/26), and each episode
+  once the guide drops it, unless TVDB numbers it.
+- Otherwise vodarr finds an episode only when Sonarr's episode number is
+  TVP's own, as in TVDB's *Klan* S15E2113. A search by title, without a TVDB
+  ID, also takes season 1's episode numbers as TVP's.
+- TVDB's *Klan* ends in 2011 and its *Barwy szczęścia* in April 2024. Sonarr
+  never asks for later episodes until they are added to TVDB.
 
 ## New episodes
 
