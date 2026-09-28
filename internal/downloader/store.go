@@ -10,7 +10,12 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
-var jobsBucket = []byte("jobs")
+var (
+	jobsBucket = []byte("jobs")
+	// queueBucket holds the queue's own state: pausedKey while it is paused.
+	queueBucket = []byte("queue")
+	pausedKey   = []byte("paused")
+)
 
 // loadJobs returns the jobs saved in db, oldest first.
 func loadJobs(db *bolt.DB) ([]*Job, error) {
@@ -37,6 +42,39 @@ func loadJobs(db *bolt.DB) ([]*Job, error) {
 		return cmp.Or(a.Added.Compare(b.Added), strings.Compare(a.ID, b.ID))
 	})
 	return jobs, nil
+}
+
+// loadPaused reports whether the whole queue was paused.
+func loadPaused(db *bolt.DB) (bool, error) {
+	var paused bool
+	err := db.View(func(tx *bolt.Tx) error {
+		if b := tx.Bucket(queueBucket); b != nil {
+			paused = b.Get(pausedKey) != nil
+		}
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("loading the queue's state from %s: %w", db.Path(), err)
+	}
+	return paused, nil
+}
+
+// putPaused saves whether the whole queue is paused. q.mu must be held.
+func (q *Queue) putPaused(paused bool) error {
+	err := q.db.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists(queueBucket)
+		if err != nil {
+			return err
+		}
+		if paused {
+			return b.Put(pausedKey, []byte("1"))
+		}
+		return b.Delete(pausedKey)
+	})
+	if err != nil {
+		return fmt.Errorf("saving the queue's pause: %w", err)
+	}
+	return nil
 }
 
 // put saves job. q.mu must be held, so saves of one job can't reorder.

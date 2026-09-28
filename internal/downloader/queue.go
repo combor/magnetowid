@@ -55,6 +55,8 @@ var (
 	// errUnreachable marks a failure to reach the provider at all, as opposed
 	// to one item's stream.
 	errUnreachable = errors.New("provider unreachable")
+	// errPaused stops a download whose job, or the whole queue, was paused.
+	errPaused = errors.New("paused")
 )
 
 // Engine fetches a stream into out.
@@ -80,6 +82,9 @@ type Job struct {
 	Attempts int       `json:"attempts,omitzero"`
 	RetryAt  time.Time `json:"retry_at,omitzero"`
 	Priority int       `json:"priority,omitzero"` // -1 low, 0 normal, 1 high, 2 force
+	// Paused holds a queued job until it is resumed. It isn't a Status, so
+	// an older magnetowid, which doesn't know it, downloads the job.
+	Paused bool `json:"paused,omitzero"`
 }
 
 // historyRetention is how long finished jobs are kept. Sonarr/Radarr handle
@@ -103,8 +108,9 @@ type Queue struct {
 	mu      sync.Mutex
 	jobs    map[string]*Job
 	order   []string
-	cancels map[string]context.CancelFunc
+	cancels map[string]context.CancelCauseFunc
 	outages map[string]*outage // by provider name
+	paused  bool               // the whole queue
 	wake    chan struct{}
 }
 
@@ -121,6 +127,10 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 	if err != nil {
 		return nil, err
 	}
+	paused, err := loadPaused(db)
+	if err != nil {
+		return nil, err
+	}
 	// Nothing is running yet, so any work folders are left over from a crash.
 	if err := os.RemoveAll(filepath.Join(dir, incompleteDir)); err != nil {
 		log.Warn("removing unfinished downloads", "err", err)
@@ -133,8 +143,9 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 		db:         db,
 		retryDelay: backoff,
 		jobs:       make(map[string]*Job),
-		cancels:    make(map[string]context.CancelFunc),
+		cancels:    make(map[string]context.CancelCauseFunc),
 		outages:    make(map[string]*outage),
+		paused:     paused,
 		wake:       make(chan struct{}, 1),
 	}
 	for _, j := range jobs {
@@ -148,9 +159,9 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 // Dir returns the download root.
 func (q *Queue) Dir() string { return q.dir }
 
-// Add queues a job and returns its SABnzbd-style ID. Higher priority jobs
-// start first. It fails if the job can't be saved.
-func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) (string, error) {
+// Add queues a job, paused if paused, and returns its SABnzbd-style ID.
+// Higher priority jobs start first. It fails if the job can't be saved.
+func (q *Queue) Add(name, nzbName, category string, priority int, paused bool, ref nzb.Ref) (string, error) {
 	job := &Job{
 		ID:       "SABnzbd_nzo_" + randomHex(8),
 		Name:     SanitizeName(name),
@@ -160,6 +171,7 @@ func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) (
 		Status:   StatusQueued,
 		Added:    time.Now(),
 		Priority: priority,
+		Paused:   paused,
 	}
 	q.mu.Lock()
 	if err := q.put(job); err != nil {
@@ -170,12 +182,101 @@ func (q *Queue) Add(name, nzbName, category string, priority int, ref nzb.Ref) (
 	q.order = append(q.order, job.ID)
 	q.mu.Unlock()
 	q.log.Info("job queued", "id", job.ID, "name", job.Name, "category", category, "priority", priority,
-		"provider", ref.Provider, "ref", ref.ID)
+		"paused", paused, "provider", ref.Provider, "ref", ref.ID)
+	q.wakeUp()
+	return job.ID, nil
+}
+
+// wakeUp has the worker look for a job to start.
+func (q *Queue) wakeUp() {
 	select {
 	case q.wake <- struct{}{}:
 	default:
 	}
-	return job.ID, nil
+}
+
+// Paused reports whether the whole queue is paused.
+func (q *Queue) Paused() bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	return q.paused
+}
+
+// SetPaused pauses or resumes the whole queue. Pausing stops the running
+// download, which starts again from the beginning once resumed: ffmpeg can't
+// carry on from where it stopped. It fails, changing nothing, if the change
+// can't be saved.
+func (q *Queue) SetPaused(paused bool) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.paused == paused {
+		return nil
+	}
+	if err := q.putPaused(paused); err != nil {
+		return err
+	}
+	q.paused = paused
+	if paused {
+		for _, cancel := range q.cancels {
+			cancel(errPaused)
+		}
+		q.log.Info("queue paused")
+	} else {
+		q.wakeUp()
+		q.log.Info("queue resumed")
+	}
+	return nil
+}
+
+// PauseJobs pauses the queued and running jobs among ids, and returns their
+// IDs. A running download stops, and starts again from the beginning once
+// resumed. It fails if a change can't be saved; the jobs before it keep
+// theirs.
+func (q *Queue) PauseJobs(ids ...string) ([]string, error) {
+	return q.setJobsPaused(true, ids)
+}
+
+// ResumeJobs resumes the paused jobs among ids, and returns the IDs of the
+// queued and running ones. It fails as PauseJobs does.
+func (q *Queue) ResumeJobs(ids ...string) ([]string, error) {
+	return q.setJobsPaused(false, ids)
+}
+
+func (q *Queue) setJobsPaused(paused bool, ids []string) ([]string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var done []string
+	for _, id := range ids {
+		job, ok := q.jobs[id]
+		if !ok || (job.Status != StatusQueued && job.Status != StatusDownloading) {
+			continue
+		}
+		if job.Paused != paused {
+			// Saved as it will be once stopped: running isn't saved.
+			saved := *job
+			saved.Paused = paused
+			if saved.Status == StatusDownloading {
+				requeue(&saved)
+			}
+			if err := q.put(&saved); err != nil {
+				return done, err
+			}
+			job.Paused = paused
+			if !paused {
+				q.log.Info("job resumed", "id", id, "name", job.Name)
+			} else {
+				if cancel := q.cancels[id]; cancel != nil {
+					cancel(errPaused)
+				}
+				q.log.Info("job paused", "id", id, "name", job.Name)
+			}
+		}
+		done = append(done, id)
+	}
+	if !paused && len(done) > 0 {
+		q.wakeUp()
+	}
+	return done, nil
 }
 
 // Jobs returns snapshots of all jobs in the order they were added.
@@ -220,7 +321,7 @@ func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
 	q.mu.Unlock()
 
 	if cancel != nil {
-		cancel()
+		cancel(nil)
 	}
 	q.log.Info("job deleted", "id", id, "delete_files", deleteFiles)
 	return true, nil
@@ -261,11 +362,14 @@ func (q *Queue) Run(ctx context.Context) {
 func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.paused {
+		return "", 0, false
+	}
 	now := time.Now()
 	var best *Job
 	for _, id := range q.order {
 		job := q.jobs[id]
-		if job.Status != StatusQueued {
+		if job.Status != StatusQueued || job.Paused {
 			continue
 		}
 		until := job.RetryAt
@@ -292,8 +396,8 @@ func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 }
 
 func (q *Queue) process(parent context.Context, id string) {
-	ctx, cancel := context.WithCancel(parent)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
 
 	q.mu.Lock()
 	job, ok := q.jobs[id]
@@ -335,6 +439,11 @@ func (q *Queue) process(parent context.Context, id string) {
 		// Interrupted by shutdown, which is not the job's fault.
 		requeue(job)
 		q.log.Info("job interrupted, requeued", "id", id, "name", job.Name)
+		return
+	}
+	if err != nil && errors.Is(context.Cause(ctx), errPaused) {
+		requeue(job)
+		q.log.Info("job stopped by a pause, requeued", "id", id, "name", job.Name)
 		return
 	}
 	if errors.Is(err, errUnreachable) {

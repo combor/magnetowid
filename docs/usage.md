@@ -107,7 +107,7 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - Host and port: magnetowid's host and port.
    - API key: the one magnetowid was started with.
    - Category: `tv` (Sonarr) or `movies` (Radarr).
-   - Priority settings (optional): magnetowid downloads one job at a time and starts higher-priority jobs first. Paused counts as Low.
+   - Priority settings (optional): magnetowid downloads one job at a time and starts higher-priority jobs first. Paused adds the job paused: see [Pausing downloads](#pausing-downloads).
 2. **Indexer:** Settings → Indexers → **Newznab**, one per site.
    - Name: e.g. "TVP VOD".
    - URL: `http://<host>:8484/tvp`, API path `/api`, the same API key.
@@ -134,6 +134,23 @@ the films it watches for once the site has them:
 - The feed covers episodes that aired in the last 14 days, and films while
   they are among the site's newest. Older ones need a search.
 - It's for sites whose notes say they support it.
+
+### Pausing downloads
+
+magnetowid takes SABnzbd's pause and resume commands, for the whole queue or
+single jobs. Sonarr and Radarr show paused jobs, but can't pause or resume
+them, so send the commands yourself, e.g. with curl:
+
+```sh
+curl 'http://localhost:8484/api?mode=pause&apikey=YOUR_API_KEY'
+curl 'http://localhost:8484/api?mode=resume&apikey=YOUR_API_KEY'
+curl 'http://localhost:8484/api?mode=queue&name=resume&value=JOB_ID&apikey=YOUR_API_KEY'
+```
+
+`mode=queue&apikey=YOUR_API_KEY` lists the jobs with their IDs (`nzo_id`);
+`name=pause` pauses the jobs in `value`, separated by commas. A download that
+is running when paused starts again from the beginning once resumed. Pauses
+survive restarts.
 
 ## Docker networking and shared downloads
 

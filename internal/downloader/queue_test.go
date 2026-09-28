@@ -122,7 +122,7 @@ func startQueueWithDelay(t *testing.T, p *fakeProvider, e Engine, retryDelay tim
 // add queues a job named name with an NZB named after it.
 func add(t *testing.T, q *Queue, name, category string, priority int, ref nzb.Ref) string {
 	t.Helper()
-	id, err := q.Add(name, name+".nzb", category, priority, ref)
+	id, err := q.Add(name, name+".nzb", category, priority, false, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -364,6 +364,89 @@ func TestShutdownRequeues(t *testing.T) {
 	}
 }
 
+// Pausing a running job stops its download without using up an attempt;
+// resumed, it starts again.
+func TestPauseRunningJob(t *testing.T) {
+	p := &fakeProvider{}
+	e := &blockingEngine{started: make(chan string, 2)}
+	q := newQueue(t, t.TempDir(), p, e)
+	run(t, q)
+	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.started
+	if ids, err := q.PauseJobs(id, "SABnzbd_nzo_gone"); err != nil || len(ids) != 1 || ids[0] != id {
+		t.Fatalf("PauseJobs = %v, %v", ids, err)
+	}
+	waitJob(t, q, id, func(j Job) bool { return j.Status == StatusQueued && j.Paused && j.Attempts == 0 })
+	select {
+	case <-e.started:
+		t.Fatal("a paused job started")
+	case <-time.After(50 * time.Millisecond):
+	}
+	if _, err := q.ResumeJobs(id); err != nil {
+		t.Fatal(err)
+	}
+	<-e.started
+	waitJob(t, q, id, func(j Job) bool { return j.Status == StatusDownloading && !j.Paused && j.Attempts == 1 })
+}
+
+// Pausing the queue stops the running download and starts nothing until it
+// is resumed, even after a restart.
+func TestPauseQueue(t *testing.T) {
+	dir := t.TempDir()
+	e := &blockingEngine{started: make(chan string, 2)}
+	q := newQueue(t, dir, &fakeProvider{}, e)
+	stop := run(t, q)
+	a := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.started
+	if err := q.SetPaused(true); err != nil {
+		t.Fatal(err)
+	}
+	waitJob(t, q, a, func(j Job) bool { return j.Status == StatusQueued && !j.Paused && j.Attempts == 0 })
+	add(t, q, "b", "tv", 0, nzb.Ref{Provider: "fake", ID: "b"})
+	stop()
+	q.db.Close()
+
+	q = newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	run(t, q)
+	if !q.Paused() {
+		t.Fatal("the queue's pause was lost in a restart")
+	}
+	time.Sleep(50 * time.Millisecond)
+	for _, j := range q.Jobs() {
+		if j.Status != StatusQueued {
+			t.Fatalf("job %s is %s while the queue is paused", j.Name, j.Status)
+		}
+	}
+	if err := q.SetPaused(false); err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range q.Jobs() {
+		waitFinished(t, q, j.ID)
+	}
+}
+
+// A job paused while running loads paused and queued after a crash, as a
+// running job isn't saved.
+func TestPausedRunningJobSurvivesCrash(t *testing.T) {
+	dir := t.TempDir()
+	// Its download doesn't stop when paused, so the crash comes first.
+	e := &orderEngine{started: make(chan struct{}), release: make(chan struct{})}
+	q := newQueue(t, dir, &fakeProvider{}, e)
+	run(t, q)
+	t.Cleanup(func() { close(e.release) })
+	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.started
+	if _, err := q.PauseJobs(id); err != nil {
+		t.Fatal(err)
+	}
+	q.db.Close() // as if magnetowid died then
+
+	q = newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	if jobs := q.Jobs(); len(jobs) != 1 || jobs[0].Status != StatusQueued || !jobs[0].Paused || jobs[0].Attempts != 0 {
+		t.Fatalf("reloaded %+v", jobs)
+	}
+}
+
 // Jobs survive a restart, deleted ones stay deleted, and folders stay reserved.
 func TestJobsPersist(t *testing.T) {
 	dir := t.TempDir()
@@ -517,7 +600,7 @@ func TestUnsavedChangesAreRefused(t *testing.T) {
 	q := newQueue(t, t.TempDir(), &fakeProvider{}, &fakeEngine{})
 	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
 	q.db.Close() // every database write fails from here on
-	if _, err := q.Add("b", "b.nzb", "tv", 0, nzb.Ref{Provider: "fake", ID: "b"}); err == nil {
+	if _, err := q.Add("b", "b.nzb", "tv", 0, false, nzb.Ref{Provider: "fake", ID: "b"}); err == nil {
 		t.Error("Add succeeded without saving")
 	}
 	if ok, err := q.Delete(id, false); ok || err == nil {

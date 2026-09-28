@@ -208,11 +208,61 @@ func TestAddFilePriority(t *testing.T) {
 }
 
 func TestParsePriority(t *testing.T) {
-	tests := map[string]int{"-100": 0, "": 0, "x": 0, "-2": -1, "-1": -1, "0": 0, "1": 1, "2": 2, "3": 2}
+	type result struct {
+		priority int
+		paused   bool
+	}
+	tests := map[string]result{"-100": {0, false}, "": {0, false}, "x": {0, false}, "-3": {-1, false},
+		"-2": {0, true}, "-1": {-1, false}, "0": {0, false}, "1": {1, false}, "2": {2, false}, "3": {2, false}}
 	for in, want := range tests {
-		if got := parsePriority(in); got != want {
-			t.Errorf("parsePriority(%q) = %d, want %d", in, got, want)
+		if priority, paused := parsePriority(in); priority != want.priority || paused != want.paused {
+			t.Errorf("parsePriority(%q) = %d, %v; want %d, %v", in, priority, paused, want.priority, want.paused)
 		}
+	}
+}
+
+// Sonarr's Paused priority adds the job paused, and the SABnzbd API pauses
+// and resumes single jobs and the whole queue.
+func TestPause(t *testing.T) {
+	srv, q := newServer(t, true)
+	out := addFileWithPriority(t, srv, "A.nzb", magnetowidNZB(t), "-2")
+	id := out["nzo_ids"].([]any)[0].(string)
+	queue := func() (paused bool, status string) {
+		t.Helper()
+		qu := call(t, srv, url.Values{"mode": {"queue"}})["queue"].(map[string]any)
+		slots := qu["slots"].([]any)
+		if len(slots) != 1 {
+			t.Fatalf("slots = %v", slots)
+		}
+		return qu["paused"].(bool), slots[0].(map[string]any)["status"].(string)
+	}
+	if paused, status := queue(); paused || status != "Paused" {
+		t.Fatalf("added paused: queue paused = %v, slot %s", paused, status)
+	}
+
+	// Resuming the job while the queue is paused doesn't start it.
+	if out := call(t, srv, url.Values{"mode": {"pause"}}); out["status"] != true {
+		t.Fatalf("pause = %v", out)
+	}
+	out = call(t, srv, url.Values{"mode": {"queue"}, "name": {"resume"}, "value": {id + ",SABnzbd_nzo_gone"}})
+	if ids, _ := out["nzo_ids"].([]any); out["status"] != true || len(ids) != 1 || ids[0] != id {
+		t.Fatalf("resume job = %v", out)
+	}
+	if paused, status := queue(); !paused || status != "Queued" {
+		t.Fatalf("queue paused: queue paused = %v, slot %s", paused, status)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if j := q.Jobs()[0]; j.Status != downloader.StatusQueued {
+		t.Fatalf("job %s while the queue is paused", j.Status)
+	}
+
+	call(t, srv, url.Values{"mode": {"resume"}})
+	deadline := time.Now().Add(5 * time.Second)
+	for q.Jobs()[0].Status != downloader.StatusCompleted {
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s after resuming", q.Jobs()[0].Status)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

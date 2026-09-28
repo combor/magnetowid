@@ -655,7 +655,7 @@ func rssSync(offset, limit string) url.Values {
 }
 
 // RSS sync gets the provider's new releases, newest first, named with the
-// *arr's title and the stream's quality.
+// *arr's title and the stream's quality, then the placeholder.
 func TestRSSListsRecentReleases(t *testing.T) {
 	day := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	rel := func(id string, ep int, published time.Time) provider.Release {
@@ -678,6 +678,7 @@ func TestRSSListsRecentReleases(t *testing.T) {
 			"Days.of.Honor.S01E01.1080p.WEB-DL.AAC.H.264-FAKE",
 			"Days.of.Honor.S01E02.720p.WEB-DL.AAC.H.264-FAKE",
 			"Days.of.Honor.S01E03.1080p.WEB-DL.AAC.H.264-FAKE",
+			"magnetowid fake feed placeholder",
 		}},
 		{"1", "1", []string{"Days.of.Honor.S01E02.720p.WEB-DL.AAC.H.264-FAKE"}},
 	} {
@@ -722,12 +723,23 @@ func TestRSSPlaceholder(t *testing.T) {
 	}
 }
 
-func TestRSSOffsetPastEnd(t *testing.T) {
-	fp := &fakeRecentProvider{releases: []provider.Release{
-		{Title: "Days of Honor", Item: provider.Item{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1}},
-	}}
-	if items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", rssSync("100", "100"))); len(items) != 0 {
-		t.Errorf("items = %+v", items)
+// The placeholder ends the last page Sonarr reads, which is the first that
+// isn't full. When the feed turns from only the placeholder to releases,
+// Sonarr finds it again, so it doesn't warn that it missed releases between.
+func TestRSSPlaceholderEndsFeed(t *testing.T) {
+	srv := newServer(t, &fakeRecentProvider{releases: manyReleases(150)})
+	if guids := allGUIDs(t, srv, "0"); len(guids) != 100 || slices.Contains(guids, "fake:placeholder") {
+		t.Errorf("full page: %d items, with the placeholder: %v", len(guids), slices.Contains(guids, "fake:placeholder"))
+	}
+	if guids := allGUIDs(t, srv, "100"); len(guids) != 51 || guids[50] != "fake:placeholder" {
+		t.Errorf("last page: %d items, ending %v", len(guids), guids[len(guids)-1:])
+	}
+
+	// Sonarr asks for the page after a full one, even if nothing is left.
+	srv = newServer(t, &fakeRecentProvider{releases: manyReleases(100)})
+	allGUIDs(t, srv, "0")
+	if guids := allGUIDs(t, srv, "100"); !slices.Equal(guids, []string{"fake:placeholder"}) {
+		t.Errorf("page past the end: %v", guids)
 	}
 }
 
@@ -760,7 +772,7 @@ func TestRSSNamesFilms(t *testing.T) {
 	}}
 	params := url.Values{"t": {"movie"}, "cat": {"2000,2040"}, "apikey": {"secret"}}
 	items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", params))
-	if len(items) != 1 || items[0].Title != "Kler.2018.1080p.WEB-DL.AAC.H.264-FAKE" || attrValue(items[0], "category") != "2040" {
+	if len(items) != 2 || items[0].Title != "Kler.2018.1080p.WEB-DL.AAC.H.264-FAKE" || attrValue(items[0], "category") != "2040" {
 		t.Errorf("items = %+v", items)
 	}
 }
@@ -785,7 +797,15 @@ func releaseGUIDs(from, to int) []string {
 	return guids
 }
 
+// rssPage returns the GUIDs of the releases on the RSS page at offset,
+// leaving out the placeholder.
 func rssPage(t *testing.T, srv *httptest.Server, offset string) []string {
+	t.Helper()
+	return slices.DeleteFunc(allGUIDs(t, srv, offset), func(guid string) bool { return guid == "fake:placeholder" })
+}
+
+// allGUIDs returns the GUIDs of every item on the RSS page at offset.
+func allGUIDs(t *testing.T, srv *httptest.Server, offset string) []string {
 	t.Helper()
 	var guids []string
 	for _, it := range parseFeed(t, get(t, srv, "/fake/api", rssSync(offset, "100"))) {

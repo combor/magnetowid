@@ -2,6 +2,7 @@
 package sabnzbd
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,7 +41,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		key = r.FormValue("apikey")
 	}
-	if key != h.APIKey {
+	// In constant time, so response times don't give the key away.
+	if subtle.ConstantTimeCompare([]byte(key), []byte(h.APIKey)) != 1 {
 		writeJSON(w, errorResponse("API Key Incorrect"))
 		return
 	}
@@ -53,12 +55,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, map[string]any{"status": map[string]string{"completedir": h.Queue.Dir()}})
 	case "addfile":
 		h.addFile(w, r)
-	case "queue":
-		if r.FormValue("name") == "delete" {
-			h.delete(w, r)
+	case "pause", "resume":
+		if err := h.Queue.SetPaused(mode == "pause"); err != nil {
+			h.Log.Error("pausing or resuming the queue", "mode", mode, "err", err)
+			writeJSON(w, errorResponse(err.Error()))
 			return
 		}
-		writeJSON(w, map[string]any{"queue": h.queue(r.FormValue("category"))})
+		writeJSON(w, map[string]any{"status": true})
+	case "queue":
+		switch name := r.FormValue("name"); name {
+		case "delete":
+			h.delete(w, r)
+		case "pause", "resume":
+			h.pauseJobs(w, r, name == "pause")
+		default:
+			writeJSON(w, map[string]any{"queue": h.queue(r.FormValue("category"))})
+		}
 	case "history":
 		if r.FormValue("name") == "delete" {
 			h.delete(w, r)
@@ -95,7 +107,8 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = strings.TrimSuffix(header.Filename, ".nzb")
 	}
-	id, err := h.Queue.Add(name, header.Filename, r.FormValue("cat"), parsePriority(r.FormValue("priority")), ref)
+	priority, paused := parsePriority(r.FormValue("priority"))
+	id, err := h.Queue.Add(name, header.Filename, r.FormValue("cat"), priority, paused, ref)
 	if err != nil {
 		h.Log.Error("queueing job", "name", name, "err", err)
 		writeJSON(w, errorResponse(err.Error()))
@@ -108,13 +121,16 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 var priorityNames = []string{"Low", "Normal", "High", "Force"}
 
 // parsePriority reads addfile's priority. The *arr default (-100) counts as
-// Normal, and Paused (-2), which magnetowid doesn't support, as Low.
-func parsePriority(s string) int {
+// Normal, and Paused (-2) adds the job paused, at Normal.
+func parsePriority(s string) (priority int, paused bool) {
 	p, err := strconv.Atoi(s)
-	if err != nil || p == -100 {
-		return 0
+	switch {
+	case err != nil || p == -100:
+		return 0, false
+	case p == -2:
+		return 0, true
 	}
-	return min(max(p, -1), 2)
+	return min(max(p, -1), 2), false
 }
 
 func formFile(r *http.Request, fields ...string) (multipart.File, *multipart.FileHeader, error) {
@@ -129,13 +145,36 @@ func formFile(r *http.Request, fields ...string) (multipart.File, *multipart.Fil
 	return nil, nil, err
 }
 
+// pauseJobs pauses or resumes the jobs listed in value.
+func (h *Handler) pauseJobs(w http.ResponseWriter, r *http.Request, pause bool) {
+	f := h.Queue.ResumeJobs
+	if pause {
+		f = h.Queue.PauseJobs
+	}
+	ids, err := f(jobIDs(r)...)
+	if err != nil {
+		h.Log.Error("pausing or resuming jobs", "pause", pause, "err", err)
+		writeJSON(w, errorResponse(err.Error()))
+		return
+	}
+	writeJSON(w, map[string]any{"status": true, "nzo_ids": ids})
+}
+
+// jobIDs returns the comma-separated job IDs in value.
+func jobIDs(r *http.Request) []string {
+	var ids []string
+	for _, id := range strings.Split(r.FormValue("value"), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
 func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	deleteFiles := r.FormValue("del_files") == "1"
 	var ids []string
-	for _, id := range strings.Split(r.FormValue("value"), ",") {
-		if id = strings.TrimSpace(id); id == "" {
-			continue
-		}
+	for _, id := range jobIDs(r) {
 		ok, err := h.Queue.Delete(id, deleteFiles)
 		if err != nil {
 			h.Log.Error("deleting job", "id", id, "err", err)
@@ -210,7 +249,7 @@ func (h *Handler) queue(cat string) map[string]any {
 			Index:      len(slots),
 			Filename:   j.Name,
 			Category:   j.Category,
-			Status:     string(j.Status),
+			Status:     slotStatus(j),
 			Priority:   priorityNames[j.Priority+1],
 			MB:         megabytes(total),
 			MBLeft:     megabytes(int64(float64(total) * (1 - j.Fraction))),
@@ -218,7 +257,15 @@ func (h *Handler) queue(cat string) map[string]any {
 			Timeleft:   timeLeft(j),
 		})
 	}
-	return map[string]any{"paused": false, "slots": slots}
+	return map[string]any{"paused": h.Queue.Paused(), "slots": slots}
+}
+
+// slotStatus is a queued or running job's status as SABnzbd gives it.
+func slotStatus(j downloader.Job) string {
+	if j.Paused {
+		return "Paused"
+	}
+	return string(j.Status)
 }
 
 type historySlot struct {
