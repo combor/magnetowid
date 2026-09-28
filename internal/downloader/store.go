@@ -3,36 +3,19 @@ package downloader
 import (
 	"cmp"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
 	bolt "go.etcd.io/bbolt"
-	bolterrors "go.etcd.io/bbolt/errors"
 )
-
-// dbFile is the job database in the download folder. It keeps the queue and
-// history across restarts.
-const dbFile = ".vodarr-jobs.db"
 
 var jobsBucket = []byte("jobs")
 
-// openDB opens the job database in dir and returns its jobs, oldest first.
-func openDB(dir string) (*bolt.DB, []*Job, error) {
-	path := filepath.Join(dir, dbFile)
-	// Without a timeout, Open waits forever for another process's lock.
-	db, err := bolt.Open(path, 0o666, &bolt.Options{Timeout: time.Second})
-	if errors.Is(err, bolterrors.ErrTimeout) {
-		return nil, nil, fmt.Errorf("%s is in use by another vodarr", path)
-	}
-	if err != nil {
-		return nil, nil, fmt.Errorf("opening %s: %w", path, err)
-	}
+// loadJobs returns the jobs saved in db, oldest first.
+func loadJobs(db *bolt.DB) ([]*Job, error) {
 	var jobs []*Job
-	err = db.Update(func(tx *bolt.Tx) error {
+	err := db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists(jobsBucket)
 		if err != nil {
 			return err
@@ -47,14 +30,13 @@ func openDB(dir string) (*bolt.DB, []*Job, error) {
 		})
 	})
 	if err != nil {
-		db.Close()
-		return nil, nil, fmt.Errorf("loading %s: %w", path, err)
+		return nil, fmt.Errorf("loading jobs from %s: %w", db.Path(), err)
 	}
 	// Keys are random IDs, so restore the order jobs were added in.
 	slices.SortFunc(jobs, func(a, b *Job) int {
 		return cmp.Or(a.Added.Compare(b.Added), strings.Compare(a.ID, b.ID))
 	})
-	return db, jobs, nil
+	return jobs, nil
 }
 
 // put saves job. q.mu must be held, so saves of one job can't reorder.
@@ -86,9 +68,4 @@ func (q *Queue) remove(ids ...string) error {
 		return fmt.Errorf("removing jobs %v: %w", ids, err)
 	}
 	return nil
-}
-
-// Close closes the job database. Call it after Run has returned.
-func (q *Queue) Close() error {
-	return q.db.Close()
 }

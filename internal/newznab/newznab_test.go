@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -95,6 +96,29 @@ type fakeTVDBProvider struct {
 func (f *fakeTVDBProvider) SearchTVDB(_ context.Context, tvdbID int, q provider.Query) (string, []provider.Item, error) {
 	f.gotTVDB, f.got = tvdbID, q
 	return f.title, f.items, f.err
+}
+
+// fakeRecentProvider also lists new releases for RSS sync.
+type fakeRecentProvider struct {
+	fakeProvider
+	releases []provider.Release
+	err      error
+	gotKind  provider.Kind
+	fail     map[string]string // ID to the Resolve prefix it fails with
+}
+
+func (f *fakeRecentProvider) Recent(_ context.Context, kind provider.Kind) ([]provider.Release, error) {
+	f.gotKind = kind
+	return f.releases, f.err
+}
+
+// Resolve is fakeProvider's, with the IDs in fail resolved as if they had
+// their prefix.
+func (f *fakeRecentProvider) Resolve(ctx context.Context, id string) (provider.Stream, error) {
+	if prefix := f.fail[id]; prefix != "" {
+		return f.fakeProvider.Resolve(ctx, prefix+"-"+id)
+	}
+	return f.fakeProvider.Resolve(ctx, id)
 }
 
 func newServer(t *testing.T, p provider.Provider) *httptest.Server {
@@ -596,5 +620,260 @@ func TestSearchByTVDBIDError(t *testing.T) {
 	})
 	if !strings.Contains(body, `<error code="900" description="Search failed: tvp: HTTP 500"`) {
 		t.Errorf("body = %s", body)
+	}
+}
+
+// rssSync is Sonarr's RSS sync request, which has no title or ID.
+func rssSync(offset, limit string) url.Values {
+	v := url.Values{"t": {"tvsearch"}, "cat": {"5000,5040"}, "extended": {"1"}, "apikey": {"secret"}}
+	if offset != "" {
+		v.Set("offset", offset)
+		v.Set("limit", limit)
+	}
+	return v
+}
+
+// RSS sync gets the provider's new releases, newest first, named with the
+// *arr's title and the stream's quality.
+func TestRSSListsRecentReleases(t *testing.T) {
+	day := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
+	rel := func(id string, ep int, published time.Time) provider.Release {
+		return provider.Release{Title: "Days of Honor", Item: provider.Item{
+			ID: id, Kind: provider.Episode, Title: "Czas honoru", Season: 1, Episode: ep, Published: published}}
+	}
+	fp := &fakeRecentProvider{releases: []provider.Release{
+		rel("3", 3, day.Add(-time.Hour)),
+		rel("720-2", 2, day),
+		rel("drm-4", 4, day),
+		rel("1", 1, day),
+	}}
+	srv := newServer(t, fp)
+	for _, tt := range []struct {
+		offset, limit string
+		want          []string
+	}{
+		// Releases published at once come in GUID order.
+		{"", "", []string{
+			"Days.of.Honor.S01E01.1080p.WEB-DL.AAC.H.264-FAKE",
+			"Days.of.Honor.S01E02.720p.WEB-DL.AAC.H.264-FAKE",
+			"Days.of.Honor.S01E03.1080p.WEB-DL.AAC.H.264-FAKE",
+		}},
+		{"1", "1", []string{"Days.of.Honor.S01E02.720p.WEB-DL.AAC.H.264-FAKE"}},
+	} {
+		items := parseFeed(t, get(t, srv, "/fake/api", rssSync(tt.offset, tt.limit)))
+		var titles []string
+		for _, it := range items {
+			titles = append(titles, it.Title)
+			if id := attrValue(it, "tvdbid"); id != "" {
+				t.Errorf("%s has tvdbid %s", it.Title, id)
+			}
+		}
+		if !slices.Equal(titles, tt.want) {
+			t.Errorf("offset %q: titles:\n%s\nwant:\n%s", tt.offset, strings.Join(titles, "\n"), strings.Join(tt.want, "\n"))
+		}
+		if tt.offset == "" && len(items) > 0 && items[0].PubDate != day.Format(time.RFC1123Z) {
+			t.Errorf("pubDate = %q, want %q", items[0].PubDate, day.Format(time.RFC1123Z))
+		}
+	}
+	if fp.gotKind != provider.Episode {
+		t.Errorf("asked for %v, want episodes", fp.gotKind)
+	}
+}
+
+// The indexer test fails on an empty feed, so the placeholder stands in
+// when nothing can be offered.
+func TestRSSPlaceholder(t *testing.T) {
+	drm := []provider.Release{{Title: "Days of Honor", Item: provider.Item{ID: "drm-1", Kind: provider.Episode, Season: 1, Episode: 1}}}
+	for name, fp := range map[string]*fakeRecentProvider{
+		"no releases":      {},
+		"only unavailable": {releases: drm},
+		"error":            {err: errors.New("tvp: HTTP 500")},
+	} {
+		items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", rssSync("0", "100")))
+		if len(items) != 1 || items[0].Title != "vodarr fake feed placeholder" {
+			t.Errorf("%s: items = %+v", name, items)
+			continue
+		}
+		// Older than any release, so Sonarr reads on to the ones it hasn't seen.
+		if published, err := time.Parse(time.RFC1123Z, items[0].PubDate); err != nil || published.After(time.Now().AddDate(-1, 0, 0)) {
+			t.Errorf("%s: placeholder published %q, want long ago", name, items[0].PubDate)
+		}
+	}
+}
+
+func TestRSSOffsetPastEnd(t *testing.T) {
+	fp := &fakeRecentProvider{releases: []provider.Release{
+		{Title: "Days of Honor", Item: provider.Item{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1}},
+	}}
+	if items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", rssSync("100", "100"))); len(items) != 0 {
+		t.Errorf("items = %+v", items)
+	}
+}
+
+func TestRSSKind(t *testing.T) {
+	for _, tt := range []struct {
+		params url.Values
+		want   provider.Kind
+	}{
+		{url.Values{"t": {"movie"}, "cat": {"2000,2040"}}, provider.Movie},
+		{url.Values{"t": {"search"}, "cat": {"2000,2040"}}, provider.Movie},
+		{url.Values{"t": {"tvsearch"}, "cat": {"5000,5040"}}, provider.Episode},
+	} {
+		fp := &fakeRecentProvider{}
+		tt.params.Set("apikey", "secret")
+		items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", tt.params))
+		if fp.gotKind != tt.want {
+			t.Errorf("%v: asked for %v, want %v", tt.params, fp.gotKind, tt.want)
+		}
+		if len(items) != 1 || items[0].Title != "vodarr fake feed placeholder" {
+			t.Errorf("%v: items = %+v", tt.params, items)
+		}
+	}
+}
+
+// manyReleases returns n releases published an hour ago, r000 onwards.
+func manyReleases(n int) []provider.Release {
+	published := time.Now().Add(-time.Hour).Truncate(time.Second)
+	var rs []provider.Release
+	for i := range n {
+		rs = append(rs, provider.Release{Title: "Days of Honor", Item: provider.Item{
+			ID: fmt.Sprintf("r%03d", i), Kind: provider.Episode, Season: 1, Episode: i + 1, Published: published}})
+	}
+	return rs
+}
+
+// releaseGUIDs returns the GUIDs of releases from, up to, the one numbered to.
+func releaseGUIDs(from, to int) []string {
+	var guids []string
+	for i := from; i <= to; i++ {
+		guids = append(guids, fmt.Sprintf("fake:r%03d", i))
+	}
+	return guids
+}
+
+func rssPage(t *testing.T, srv *httptest.Server, offset string) []string {
+	t.Helper()
+	var guids []string
+	for _, it := range parseFeed(t, get(t, srv, "/fake/api", rssSync(offset, "100"))) {
+		guids = append(guids, it.GUID)
+	}
+	return guids
+}
+
+// A release left out because its stream couldn't be read comes first once it
+// can be, even if over 100 releases share its date: Sonarr reads further
+// pages only until one holds the newest release it saw before.
+func TestRSSOffersReleaseReadLater(t *testing.T) {
+	fp := &fakeRecentProvider{releases: manyReleases(120), fail: map[string]string{"r105": "down"}}
+	day := fp.releases[0].Published
+	var h *Handler
+	srv := newServerWith(t, fp, func(set *Handler) { h = set })
+	// As after a restart: every release is newer than any Sonarr saw, so it
+	// reads every page.
+	if guids := append(rssPage(t, srv, "0"), rssPage(t, srv, "100")...); len(guids) != 119 || slices.Contains(guids, "fake:r105") {
+		t.Fatalf("first sync: %d releases, r105 among them: %v", len(guids), slices.Contains(guids, "fake:r105"))
+	}
+	fp.fail = nil
+	h.Probe = &probe.Prober{Client: streams.Client()} // forget the failure
+	items := parseFeed(t, get(t, srv, "/fake/api", rssSync("0", "100")))
+	if len(items) != 100 || items[0].GUID != "fake:r105" || items[1].GUID != "fake:r000" {
+		t.Fatalf("next sync's first page: %d releases, starting %+v", len(items), items[:min(2, len(items))])
+	}
+	if published, err := time.Parse(time.RFC1123Z, items[0].PubDate); err != nil || !published.After(day) {
+		t.Errorf("r105 published %q, want after the others' %s", items[0].PubDate, day.Format(time.RFC1123Z))
+	}
+	// It keeps that date.
+	if again := parseFeed(t, get(t, srv, "/fake/api", rssSync("0", "100"))); again[0].GUID != "fake:r105" || again[0].PubDate != items[0].PubDate {
+		t.Errorf("then: %s published %s, want fake:r105 published %s", again[0].GUID, again[0].PubDate, items[0].PubDate)
+	}
+}
+
+// Releases not probed in time are held too: the page came short, so Sonarr
+// didn't ask for the rest.
+func TestRSSHoldsReleasesNotProbedInTime(t *testing.T) {
+	fp := &fakeRecentProvider{releases: manyReleases(200), fail: map[string]string{}}
+	for i := 1; i < 100; i++ {
+		fp.fail[fmt.Sprintf("r%03d", i)] = "stall"
+	}
+	var h *Handler
+	srv := newServerWith(t, fp, func(set *Handler) { h, set.probeBudget = set, 300*time.Millisecond })
+	if guids := rssPage(t, srv, "0"); !slices.Equal(guids, []string{"fake:r000"}) {
+		t.Fatalf("out of time: %v, want only fake:r000", guids)
+	}
+
+	fp.fail = nil
+	h.probeBudget = 0
+	// Sonarr reads on until it reaches fake:r000, the newest release it saw.
+	if guids := rssPage(t, srv, "0"); !slices.Equal(guids, releaseGUIDs(1, 100)) {
+		t.Errorf("next sync's first page: %v", guids)
+	}
+	if guids := rssPage(t, srv, "100"); !slices.Equal(guids, append(releaseGUIDs(101, 199), "fake:r000")) {
+		t.Errorf("next sync's second page: %v", guids)
+	}
+}
+
+// Held releases keep their places while Sonarr pages through a sync, so
+// none is skipped.
+func TestRSSPagesStayPutWhileHeldReleasesReturn(t *testing.T) {
+	fp := &fakeRecentProvider{releases: manyReleases(250), fail: map[string]string{}}
+	for i := range 150 {
+		fp.fail[fmt.Sprintf("r%03d", i)] = "down"
+	}
+	var h *Handler
+	srv := newServerWith(t, fp, func(set *Handler) { h = set })
+	if guids := rssPage(t, srv, "0"); !slices.Equal(guids, releaseGUIDs(150, 249)) {
+		t.Fatalf("first sync: %v", guids)
+	}
+	rssPage(t, srv, "100")
+
+	fp.fail = nil
+	h.Probe = &probe.Prober{Client: streams.Client()} // forget the failures
+	if guids := rssPage(t, srv, "0"); !slices.Equal(guids, releaseGUIDs(0, 99)) {
+		t.Errorf("next sync's first page: %v", guids)
+	}
+	if guids := rssPage(t, srv, "100"); !slices.Equal(guids, releaseGUIDs(100, 199)) {
+		t.Errorf("next sync's second page: %v", guids)
+	}
+}
+
+// Releases that keep failing slowly don't use up every sync's probing time:
+// held releases not tried for longest are probed first, so the others get
+// their turn.
+func TestRSSRetriesFailuresLast(t *testing.T) {
+	fp := &fakeRecentProvider{releases: manyReleases(30), fail: map[string]string{}}
+	for i := range 12 {
+		fp.fail[fmt.Sprintf("r%03d", i)] = "stall"
+	}
+	var h *Handler
+	srv := newServerWith(t, fp, func(set *Handler) { h, set.probeBudget = set, 500*time.Millisecond })
+	offered := map[string]bool{}
+	for range 6 {
+		// A stream's failure is forgotten by the next sync, 15 minutes on.
+		h.Probe = &probe.Prober{Client: streams.Client(), Timeout: 300 * time.Millisecond}
+		for _, guid := range rssPage(t, srv, "0") {
+			offered[guid] = true
+		}
+	}
+	for _, guid := range releaseGUIDs(12, 29) {
+		if !offered[guid] {
+			t.Errorf("%s never offered", guid)
+		}
+	}
+}
+
+// A sync's later pages come from the releases listed when it began, so a
+// release dropped meanwhile doesn't shift another off every page.
+func TestRSSPagesComeFromOneList(t *testing.T) {
+	fp := &fakeRecentProvider{releases: manyReleases(150)}
+	srv := newServer(t, fp)
+	if guids := rssPage(t, srv, "0"); !slices.Equal(guids, releaseGUIDs(0, 99)) {
+		t.Fatalf("first page: %v", guids)
+	}
+	fp.releases = slices.Delete(slices.Clone(fp.releases), 10, 11) // r010 leaves the feed
+	if guids := rssPage(t, srv, "100"); !slices.Equal(guids, releaseGUIDs(100, 149)) {
+		t.Errorf("second page: %v", guids)
+	}
+	if guids := rssPage(t, srv, "0"); slices.Contains(guids, "fake:r010") {
+		t.Error("the next sync still has fake:r010")
 	}
 }

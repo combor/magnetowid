@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,7 +20,7 @@ import (
 // Sonarr's series titles are often English ("Days of Honor"), but TVP only
 // knows Polish ones ("Czas honoru"). For Sonarr's search by TVDB ID, Wikidata
 // gives the Polish title and Skyhook, where Sonarr gets its titles, the title
-// the releases need.
+// the releases need. Skyhook also gives the air dates the feed goes by.
 
 const (
 	skyhookURL  = "https://skyhook.sonarr.tv/v1/tvdb/shows/en"
@@ -38,39 +39,78 @@ const (
 )
 
 // SearchTVDB searches TVP for the series with the TVDB ID by its Polish
-// titles. It skips titles that match Sonarr's, which Sonarr searches by
-// itself when this finds nothing. A failed lookup is logged and finds nothing
-// for the same reason.
+// titles, then by Sonarr's. A series found on TVP is watched for new
+// episodes, even if it lacks this one. A failed lookup is logged and finds
+// nothing, so Sonarr searches by title.
 func (p *Provider) SearchTVDB(ctx context.Context, tvdbID int, q provider.Query) (string, []provider.Item, error) {
 	s, err := p.titles.series(ctx, tvdbID)
 	if err != nil {
 		p.log.Warn("TVDB lookup failed; Sonarr will search by title", "tvdbid", tvdbID, "err", err)
 		return "", nil, nil
 	}
-	tried := map[string]bool{provider.NormalizeTitle(s.title): true}
-	for _, title := range s.polish {
+	m, err := p.searchTitles(ctx, s, q)
+	if err != nil {
+		return "", nil, err
+	}
+	if m.serialFound {
+		p.watch(tvdbID, s.title)
+	}
+	if len(m.items) > 0 {
+		p.log.Info("found TVP series by TVDB ID", "tvdbid", tvdbID, "title", s.title, "tvp_title", m.tvpTitle)
+	}
+	return s.title, m.items, nil
+}
+
+// titleMatch is what searching TVP by a series' titles found.
+type titleMatch struct {
+	items       []provider.Item
+	tvpTitle    string // the title that found items
+	serialFound bool   // with or without the episode
+}
+
+// searchTitles searches TVP for the episode by the series' Polish titles,
+// then by Sonarr's, until one finds it. It doesn't log, as the feed runs it
+// for every new episode.
+func (p *Provider) searchTitles(ctx context.Context, s series, q provider.Query) (titleMatch, error) {
+	var m titleMatch
+	tried := map[string]bool{}
+	for _, title := range append(slices.Clone(s.polish), s.title) {
 		norm := provider.NormalizeTitle(title)
 		if norm == "" || tried[norm] {
 			continue
 		}
 		tried[norm] = true
-		q.Title = title
-		items, err := p.Search(ctx, q)
+		serial, ok, err := p.findSerial(ctx, title)
 		if err != nil {
-			return "", nil, err
+			return titleMatch{}, err
+		}
+		if !ok {
+			continue
+		}
+		m.serialFound = true
+		items, err := p.serialEpisodes(ctx, serial, q)
+		if err != nil {
+			return titleMatch{}, err
 		}
 		if len(items) > 0 {
-			p.log.Info("found TVP series by TVDB ID", "tvdbid", tvdbID, "title", s.title, "tvp_title", title)
-			return s.title, items, nil
+			m.items, m.tvpTitle = items, title
+			return m, nil
 		}
 	}
-	return s.title, nil, nil
+	return m, nil
 }
 
-// series holds a series' titles.
+// series holds a series' titles and aired episodes.
 type series struct {
-	title  string   // Sonarr's
-	polish []string // Wikidata's, possibly none
+	title    string   // Sonarr's
+	polish   []string // Wikidata's, possibly none
+	episodes []airedEpisode
+}
+
+// airedEpisode is an episode with a TVDB air date, in TVDB's numbering.
+type airedEpisode struct {
+	season, episode int
+	aired           time.Time
 }
 
 // titleLookup finds series titles by TVDB ID and caches them. It is safe
@@ -131,8 +171,13 @@ func (l *titleLookup) series(ctx context.Context, tvdbID int) (series, error) {
 
 func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 	var show struct {
-		Title  string `json:"title"`
-		ImdbID string `json:"imdbId"`
+		Title    string `json:"title"`
+		ImdbID   string `json:"imdbId"`
+		Episodes []struct {
+			SeasonNumber  int    `json:"seasonNumber"`
+			EpisodeNumber int    `json:"episodeNumber"`
+			AirDateUtc    string `json:"airDateUtc"`
+		} `json:"episodes"`
 	}
 	if err := l.get(ctx, l.skyhookURL+"/"+strconv.Itoa(tvdbID), &show); err != nil {
 		return series{}, fmt.Errorf("skyhook: %w", err)
@@ -140,13 +185,20 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 	if show.Title == "" {
 		return series{}, fmt.Errorf("skyhook: TVDB %d has no title", tvdbID)
 	}
+	s := series{title: show.Title}
+	for _, e := range show.Episodes {
+		aired, err := time.Parse(time.RFC3339, e.AirDateUtc)
+		if e.SeasonNumber <= 0 || e.EpisodeNumber <= 0 || err != nil {
+			continue // specials, and episodes not yet scheduled
+		}
+		s.episodes = append(s.episodes, airedEpisode{season: e.SeasonNumber, episode: e.EpisodeNumber, aired: aired})
+	}
 
 	// The TVDB ID finds the Wikidata item; the IMDb ID covers items without it.
 	claims := []string{"P4835=" + strconv.Itoa(tvdbID)}
 	if isIMDbID(show.ImdbID) {
 		claims = append(claims, "P345="+show.ImdbID)
 	}
-	s := series{title: show.Title}
 	for _, claim := range claims {
 		titles, found, err := l.polishLabels(ctx, claim)
 		if err != nil {

@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"time"
 
+	bolt "go.etcd.io/bbolt"
+
 	"github.com/combor/vodarr/internal/provider"
 )
 
@@ -27,12 +29,29 @@ type Provider struct {
 	client  *http.Client
 	baseURL string
 	titles  *titleLookup
+	cache   *responseCache
+	watched *watchList
+	feed    feed
 	log     *slog.Logger
 }
 
-// New returns a TVP provider using client for API calls.
-func New(client *http.Client, log *slog.Logger) *Provider {
-	return &Provider{client: client, baseURL: defaultBaseURL, titles: newTitleLookup(client), log: log}
+// New returns a TVP provider using client for API calls. It keeps the
+// series it watches for new episodes in db, or only in memory if db is nil.
+func New(client *http.Client, log *slog.Logger, db *bolt.DB) (*Provider, error) {
+	watched, err := loadWatchList(db)
+	if err != nil {
+		return nil, err
+	}
+	p := &Provider{
+		client:  client,
+		baseURL: defaultBaseURL,
+		titles:  newTitleLookup(client),
+		cache:   newResponseCache(),
+		watched: watched,
+		log:     log,
+	}
+	p.feed.rebuild = p.rebuildFeed
+	return p, nil
 }
 
 func (p *Provider) Name() string { return "tvp" }
@@ -60,23 +79,32 @@ func (p *Provider) Search(ctx context.Context, q provider.Query) ([]provider.Ite
 	return nil, nil
 }
 
-// searchEpisodes maps the *arr's season/episode onto TVP's episode numbers,
-// which often run across seasons (Ranczo's season 2 is 14-26).
 func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]provider.Item, error) {
 	if q.Season <= 0 {
 		return nil, nil
 	}
-	serials, err := p.search(ctx, "SERIAL", q.Title)
-	if err != nil {
+	serial, ok, err := p.findSerial(ctx, q.Title)
+	if err != nil || !ok {
 		return nil, err
 	}
-	serial, ok := p.pick(serials, q)
-	if !ok {
-		return nil, nil
-	}
+	return p.serialEpisodes(ctx, serial, q)
+}
 
-	var seasons []product
-	if err := p.get(ctx, fmt.Sprintf("vods/serials/%d/seasons", serial.ID), nil, &seasons); err != nil {
+// findSerial returns the free TVP serial with the title.
+func (p *Provider) findSerial(ctx context.Context, title string) (product, bool, error) {
+	serials, err := p.search(ctx, "SERIAL", title)
+	if err != nil {
+		return product{}, false, err
+	}
+	serial, ok := p.pick(serials, title)
+	return serial, ok, nil
+}
+
+// serialEpisodes maps the *arr's season/episode onto TVP's episode numbers,
+// which often run across seasons (Ranczo's season 2 is 14-26).
+func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provider.Query) ([]provider.Item, error) {
+	seasons, err := p.seasons(ctx, serial.ID)
+	if err != nil {
 		return nil, err
 	}
 	var episodes []product
@@ -259,20 +287,34 @@ func findSeason(seasons []product, number int) (product, bool) {
 	return product{}, false
 }
 
+// seasons returns a serial's seasons. The slice is shared: don't modify it.
+func (p *Provider) seasons(ctx context.Context, serialID int64) ([]product, error) {
+	path := fmt.Sprintf("vods/serials/%d/seasons", serialID)
+	return cached(p.cache, path, func() ([]product, error) {
+		var seasons []product
+		err := p.get(ctx, path, nil, &seasons)
+		return seasons, err
+	})
+}
+
 // episodes returns a season's episodes sorted by number, without specials.
+// The slice is shared: don't modify it.
 func (p *Provider) episodes(ctx context.Context, serialID, seasonID int64) ([]product, error) {
-	var all []product
-	if err := p.get(ctx, fmt.Sprintf("vods/serials/%d/seasons/%d/episodes", serialID, seasonID), nil, &all); err != nil {
-		return nil, err
-	}
-	numbered := all[:0]
-	for _, e := range all {
-		if e.Number > 0 {
-			numbered = append(numbered, e)
+	path := fmt.Sprintf("vods/serials/%d/seasons/%d/episodes", serialID, seasonID)
+	return cached(p.cache, path, func() ([]product, error) {
+		var all []product
+		if err := p.get(ctx, path, nil, &all); err != nil {
+			return nil, err
 		}
-	}
-	sort.SliceStable(numbered, func(i, j int) bool { return numbered[i].Number < numbered[j].Number })
-	return numbered, nil
+		numbered := all[:0]
+		for _, e := range all {
+			if e.Number > 0 {
+				numbered = append(numbered, e)
+			}
+		}
+		sort.SliceStable(numbered, func(i, j int) bool { return numbered[i].Number < numbered[j].Number })
+		return numbered, nil
+	})
 }
 
 func (p *Provider) searchMovies(ctx context.Context, q provider.Query) ([]provider.Item, error) {
@@ -302,8 +344,8 @@ func (p *Provider) searchMovies(ctx context.Context, q provider.Query) ([]provid
 }
 
 // pick returns the first free serial whose title matches exactly.
-func (p *Provider) pick(serials []product, q provider.Query) (product, bool) {
-	want := provider.NormalizeTitle(q.Title)
+func (p *Provider) pick(serials []product, title string) (product, bool) {
+	want := provider.NormalizeTitle(title)
 	var matches []product
 	for _, s := range serials {
 		if !s.Payable && titleMatches(s, want) {
@@ -314,7 +356,7 @@ func (p *Provider) pick(serials []product, q provider.Query) (product, bool) {
 		return product{}, false
 	}
 	if len(matches) > 1 {
-		p.log.Warn("several TVP serials match; using the first", "title", q.Title, "count", len(matches))
+		p.log.Warn("several TVP serials match; using the first", "title", title, "count", len(matches))
 	}
 	return matches[0], true
 }
@@ -324,16 +366,20 @@ func titleMatches(v product, normalized string) bool {
 		(v.OriginalTitle != "" && provider.NormalizeTitle(v.OriginalTitle) == normalized)
 }
 
+// search returns TVP's search results. The slice is shared: don't modify it.
 func (p *Provider) search(ctx context.Context, kind, keyword string) ([]product, error) {
-	var res struct {
-		Items []product `json:"items"`
-	}
-	err := p.get(ctx, "vods/search/"+kind, url.Values{"keyword": {keyword}}, &res)
-	return res.Items, err
+	path, params := "vods/search/"+kind, url.Values{"keyword": {keyword}}
+	return cached(p.cache, path+"?"+params.Encode(), func() ([]product, error) {
+		var res struct {
+			Items []product `json:"items"`
+		}
+		err := p.get(ctx, path, params, &res)
+		return res.Items, err
+	})
 }
 
 // Resolve returns the current stream URL. It embeds the requester's IP and a
-// date, so it is only good for an immediate download.
+// date, so it is only good for an immediate download, and is never cached.
 func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, error) {
 	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
 		return provider.Stream{}, fmt.Errorf("tvp: invalid id %q", id)

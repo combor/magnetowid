@@ -94,7 +94,7 @@ section in `compose.yaml`. For the Linux service, set them in
 |---|---|---|---|
 | `-listen` | `VODARR_LISTEN` | `:8484` | listen address |
 | `-api-key` | `VODARR_API_KEY` | | required; used by both APIs |
-| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the job database to `<dir>/.vodarr-jobs.db` |
+| `-download-dir` | `VODARR_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the database of jobs and watched series to `<dir>/.vodarr-jobs.db` |
 | `-categories` | `VODARR_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `VODARR_FFMPEG` | `ffmpeg` | ffmpeg binary |
 
@@ -114,7 +114,23 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - Categories: 5000, 5040 (Sonarr) or 2000, 2040 (Radarr).
    - **Download Client:** set it to the client from step 1, so vodarr releases never go to a real Usenet client.
 
-The test buttons should pass for both. The indexer test uses a placeholder item that is never grabbed.
+The test buttons should pass for both. When a site has nothing new to offer,
+its feed holds a placeholder item, which is never grabbed, because the indexer
+test fails on an empty feed.
+
+### New episodes (RSS)
+
+Sonarr finds new episodes through RSS sync, every 15 minutes by default.
+vodarr's feed offers the new episodes of the series it watches:
+
+- vodarr starts watching a series the first time Sonarr searches for it, for
+  example when the series is added with a search for missing episodes.
+- After upgrading from a vodarr without RSS, run a search on each existing
+  series once, e.g. **Search Monitored** on the series page.
+- The feed covers episodes that aired in the last 14 days. Older ones need a
+  search.
+- It's for TV only, for sites whose notes say they support it. Radarr's feed
+  holds only the placeholder.
 
 ## Docker networking and shared downloads
 
@@ -174,11 +190,13 @@ Include the steps to reproduce and any relevant error message, with API keys rem
   - Sonarr only sends its own series title, which is often English. A series is
     found only if that title matches the site's, unless the site can also be
     searched by TVDB ID. The notes for each site say whether it can.
+- **Episode numbers:** a series whose seasons or episode numbers on the site
+  differ from TVDB's isn't found, by search or by RSS.
 - **What can't be downloaded:** DRM-protected and paid content, and titles not available where vodarr runs. vodarr leaves them out of search results, and logs how many it left out with the site's reason for the first. A job can still fail if a title stops being available between the search and the download. Getting network access to region-restricted titles is up to the operator.
 - **Release details:**
   - A release's name gives the resolution and codecs of the best stream the site offers, which is the one vodarr downloads. vodarr reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
   - Only a single audio track is kept, and no subtitles.
-- **Restarts:** the queue and history are saved in `.vodarr-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one vodarr can use it at a time.
+- **Restarts:** the queue, the history and the series watched for new episodes are saved in `.vodarr-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one vodarr can use it at a time.
 
 ## Adding a site
 
@@ -188,6 +206,8 @@ Implement `provider.Provider` (`internal/provider/provider.go`) in a new package
 - resolves an ID to a stream URL ffmpeg can open, at download time;
 - optionally implements `provider.TVDBSearcher` to find series by TVDB ID, if
   Sonarr's titles don't match the site's;
+- optionally implements `provider.RecentLister` to offer new releases to RSS
+  sync;
 - documents the site's own behaviour and limits in a `README.md` in its package.
 
 Everything else is shared.
