@@ -97,6 +97,12 @@ section in `compose.yaml`. For the Linux service, set them in
 | `-download-dir` | `MAGNETOWID_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the database of jobs and of the series and films watched for new releases to `<dir>/.magnetowid-jobs.db` |
 | `-categories` | `MAGNETOWID_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `MAGNETOWID_FFMPEG` | `ffmpeg` | ffmpeg binary |
+| `-log-level` | `MAGNETOWID_LOG_LEVEL` | `info` | `debug` also logs each request, RSS sync and rebuild of a site's feeds; `warn` and `error` log less |
+
+`GET /health` answers `OK` while magnetowid runs, without an API key, for
+monitoring. The container's health check uses it: `magnetowid -healthcheck`
+asks the magnetowid at `MAGNETOWID_LISTEN` and exits with 0 if it answers, and
+`docker ps` shows the result.
 
 Sonarr/Radarr must be able to read the download directory. If they see it at a different path (e.g. in containers), add a Remote Path Mapping.
 
@@ -198,7 +204,9 @@ To inspect recent container messages:
 docker compose logs --tail 100 magnetowid
 ```
 
-For the Linux service, use `journalctl -u magnetowid -n 100`.
+For the Linux service, use `journalctl -u magnetowid -n 100`. To see each
+request from Sonarr/Radarr and what each RSS sync offered, set
+`MAGNETOWID_LOG_LEVEL=debug`.
 
 For bugs or feature requests, [open an issue](https://github.com/combor/magnetowid/issues).
 Include the steps to reproduce and any relevant error message, with API keys removed.
