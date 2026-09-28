@@ -26,53 +26,55 @@ nv-hlsfmp4-index-vod4-f1-v1.m3u8
 
 func TestSelectRenditions(t *testing.T) {
 	tests := []struct {
-		name, playlist string
-		video          Variant
-		audio          string
-		ok             bool
+		name, playlist  string
+		video           Variant
+		audio, language string
+		ok              bool
 	}{
 		{"tvp", tvpMaster, Variant{
 			URI: "nv-hlsfmp4-index-vod4-f7-v1.m3u8", Width: 1920, Height: 1080, Bandwidth: 5118260,
 			Codecs: "avc1.640029,mp4a.40.2", audio: "audio0",
-		}, "nv-hlsfmp4-index-vod4-f1-a1.m3u8", true},
+		}, "nv-hlsfmp4-index-vod4-f1-a1.m3u8", "pl", true},
 		{"muxed audio, average bandwidth", `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=800000,RESOLUTION=640x360
 low.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=2000000,AVERAGE-BANDWIDTH=1500000,RESOLUTION=1280x720
 high.m3u8
-`, Variant{URI: "high.m3u8", Width: 1280, Height: 720, Bandwidth: 2000000, Average: 1500000}, "", true},
+`, Variant{URI: "high.m3u8", Width: 1280, Height: 720, Bandwidth: 2000000, Average: 1500000}, "", "", true},
 		{"audio-only variant and no resolutions", `#EXTM3U
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="en.m3u8"
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",AUTOSELECT=YES,URI="pl.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",LANGUAGE="en",URI="en.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",LANGUAGE="pl",AUTOSELECT=YES,URI="pl.m3u8"
 #EXT-X-STREAM-INF:BANDWIDTH=900000,CODECS="mp4a.40.2",AUDIO="a"
 audio-only.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=300000,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="a"
 video.m3u8
-`, Variant{URI: "video.m3u8", Bandwidth: 300000, Codecs: "avc1.4d401f,mp4a.40.2", audio: "a"}, "pl.m3u8", true},
+`, Variant{URI: "video.m3u8", Bandwidth: 300000, Codecs: "avc1.4d401f,mp4a.40.2", audio: "a"}, "pl.m3u8", "pl", true},
+		// The rendition's LANGUAGE is the muxed audio's.
 		{"default audio muxed into the variant", `#EXTM3U
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",DEFAULT=YES,AUTOSELECT=YES
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",URI="en.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",LANGUAGE="pl",DEFAULT=YES,AUTOSELECT=YES
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",LANGUAGE="en",URI="en.m3u8"
 #EXT-X-STREAM-INF:BANDWIDTH=2000000,RESOLUTION=1280x720,AUDIO="a"
 video.m3u8
-`, Variant{URI: "video.m3u8", Width: 1280, Height: 720, Bandwidth: 2000000, audio: "a"}, "", true},
+`, Variant{URI: "video.m3u8", Width: 1280, Height: 720, Bandwidth: 2000000, audio: "a"}, "", "pl", true},
 		{"no codecs means video, bandwidth breaks ties", `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=1
 a.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=2
 b.m3u8
-`, Variant{URI: "b.m3u8", Bandwidth: 2}, "", true},
+`, Variant{URI: "b.m3u8", Bandwidth: 2}, "", "", true},
 		{"media playlist", `#EXTM3U
 #EXT-X-TARGETDURATION:4
 #EXT-X-MAP:URI="init.mp4"
 #EXTINF:4.0,
 seg1.m4s
 #EXT-X-ENDLIST
-`, Variant{}, "", false},
+`, Variant{}, "", "", false},
 	}
 	for _, tt := range tests {
 		video, audio, ok := selectRenditions(tt.playlist)
-		if video != tt.video || audio != tt.audio || ok != tt.ok {
-			t.Errorf("%s: got (%+v, %q, %v), want (%+v, %q, %v)", tt.name, video, audio, ok, tt.video, tt.audio, tt.ok)
+		if video != tt.video || audio.uri != tt.audio || audio.language != tt.language || ok != tt.ok {
+			t.Errorf("%s: got (%+v, %q, %q, %v), want (%+v, %q, %q, %v)", tt.name,
+				video, audio.uri, audio.language, ok, tt.video, tt.audio, tt.language, tt.ok)
 		}
 	}
 }
@@ -117,7 +119,8 @@ func TestLoad(t *testing.T) {
 			URI:   srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f7-v1.m3u8",
 			Width: 1920, Height: 1080, Bandwidth: 5118260, Codecs: "avc1.640029,mp4a.40.2", audio: "audio0",
 		},
-		Audio: srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f1-a1.m3u8",
+		Audio:         srv.URL + "/token/abc/video.ism/nv-hlsfmp4-index-vod4-f1-a1.m3u8",
+		AudioLanguage: "pl",
 	}
 	if m != want || gotUA != "magnetowid-test" {
 		t.Errorf("master: got %+v (UA %q), want %+v", m, gotUA, want)

@@ -58,10 +58,28 @@ func TestCodecs(t *testing.T) {
 	}
 }
 
+func TestLanguageName(t *testing.T) {
+	for _, tt := range []struct{ language, want string }{
+		{"pl", "POLISH"},
+		{"pl-PL", "POLISH"},
+		{"PL", "POLISH"},
+		{"nb", "NORWEGIAN"},
+		{"en-GB", "ENGLISH"},
+		{"", ""},
+		{"und", ""},
+		{"cs", ""}, // Sonarr and Radarr read only "CZ"
+	} {
+		if got := (Info{Language: tt.language}).LanguageName(); got != tt.want {
+			t.Errorf("%q = %q, want %q", tt.language, got, tt.want)
+		}
+	}
+}
+
 const master = `#EXTM3U
-#EXT-X-STREAM-INF:BANDWIDTH=3598429,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",LANGUAGE="pl",NAME="Polski",AUTOSELECT=YES,DEFAULT=YES,URI="a.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=3598429,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2",AUDIO="audio0"
 720.m3u8
-#EXT-X-STREAM-INF:BANDWIDTH=5118260,AVERAGE-BANDWIDTH=4000000,RESOLUTION=1920x1080,CODECS="avc1.640029,mp4a.40.2"
+#EXT-X-STREAM-INF:BANDWIDTH=5118260,AVERAGE-BANDWIDTH=4000000,RESOLUTION=1920x1080,CODECS="avc1.640029,mp4a.40.2",AUDIO="audio0"
 1080.m3u8
 `
 
@@ -130,7 +148,7 @@ func newFixture(t *testing.T, flaky int) (*Prober, *fakeProvider) {
 
 func TestProbe(t *testing.T) {
 	pr, p := newFixture(t, 0)
-	want := Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Bandwidth: 4000000}
+	want := Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Bandwidth: 4000000, Language: "pl"}
 	for range 2 {
 		if got, err := pr.Probe(context.Background(), p, "ok.m3u8"); err != nil || got != want {
 			t.Fatalf("Probe = %+v, %v; want %+v", got, err, want)

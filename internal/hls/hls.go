@@ -32,8 +32,9 @@ type Variant struct {
 // Master is a master playlist's best video variant and its audio rendition,
 // with URIs resolved against the playlist's final URL.
 type Master struct {
-	Video Variant
-	Audio string // "" when the audio is in the variant
+	Video         Variant
+	Audio         string // "" when the audio is in the variant
+	AudioLanguage string // the audio rendition's LANGUAGE (RFC 5646, e.g. "pl"); "" if not given
 }
 
 // Load fetches s and picks its best variant. ok is false when s isn't an HLS
@@ -71,21 +72,21 @@ func Load(ctx context.Context, client *http.Client, s provider.Stream) (m Master
 	}
 	base = resp.Request.URL // after redirects
 	video.URI = resolve(base, video.URI)
-	if audio != "" {
-		audio = resolve(base, audio)
+	if audio.uri != "" {
+		audio.uri = resolve(base, audio.uri)
 	}
-	return Master{Video: video, Audio: audio}, true, nil
+	return Master{Video: video, Audio: audio.uri, AudioLanguage: audio.language}, true, nil
 }
 
 type rendition struct {
-	group, uri          string
-	isDefault, autoPick bool
+	group, uri, language string
+	isDefault, autoPick  bool
 }
 
-// selectRenditions returns the best video variant and its separate audio
-// rendition URI, if any. ok is false for anything but a usable master
-// playlist.
-func selectRenditions(playlist string) (video Variant, audio string, ok bool) {
+// selectRenditions returns the best video variant and its audio rendition,
+// if the playlist describes one. The rendition's URI is "" when the audio is
+// in the variant. ok is false for anything but a usable master playlist.
+func selectRenditions(playlist string) (video Variant, audio rendition, ok bool) {
 	var variants []Variant
 	var audios []rendition
 	var pending map[string]string
@@ -99,7 +100,7 @@ func selectRenditions(playlist string) (video Variant, audio string, ok bool) {
 			a := parseAttrs(strings.TrimPrefix(line, "#EXT-X-MEDIA:"))
 			if a["TYPE"] == "AUDIO" {
 				audios = append(audios, rendition{
-					group: a["GROUP-ID"], uri: a["URI"],
+					group: a["GROUP-ID"], uri: a["URI"], language: a["LANGUAGE"],
 					isDefault: a["DEFAULT"] == "YES", autoPick: a["AUTOSELECT"] == "YES",
 				})
 			}
@@ -123,7 +124,7 @@ func selectRenditions(playlist string) (video Variant, audio string, ok bool) {
 		}
 	}
 	if len(candidates) == 0 {
-		return Variant{}, "", false
+		return Variant{}, rendition{}, false
 	}
 	sort.SliceStable(candidates, func(i, j int) bool {
 		pi, pj := candidates[i].Width*candidates[i].Height, candidates[j].Width*candidates[j].Height
@@ -136,11 +137,11 @@ func selectRenditions(playlist string) (video Variant, audio string, ok bool) {
 	return best, pickAudio(audios, best.audio), true
 }
 
-// pickAudio returns the URI of the group's DEFAULT, else AUTOSELECT, else
-// first rendition. "" means the audio is muxed into the variant.
-func pickAudio(audios []rendition, group string) string {
+// pickAudio returns the group's DEFAULT, else AUTOSELECT, else first
+// rendition. A zero rendition means the variant has no audio group.
+func pickAudio(audios []rendition, group string) rendition {
 	if group == "" {
-		return ""
+		return rendition{}
 	}
 	var first, auto *rendition
 	for i := range audios {
@@ -149,7 +150,7 @@ func pickAudio(audios []rendition, group string) string {
 			continue
 		}
 		if a.isDefault {
-			return a.uri
+			return *a
 		}
 		if first == nil {
 			first = a
@@ -159,12 +160,12 @@ func pickAudio(audios []rendition, group string) string {
 		}
 	}
 	if auto != nil {
-		return auto.uri
+		return *auto
 	}
 	if first != nil {
-		return first.uri
+		return *first
 	}
-	return ""
+	return rendition{}
 }
 
 // hasVideo reports whether CODECS names a video codec; an empty CODECS counts.

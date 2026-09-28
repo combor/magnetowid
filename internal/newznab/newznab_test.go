@@ -36,6 +36,12 @@ func TestMain(m *testing.M) {
 #EXT-X-STREAM-INF:BANDWIDTH=5118260,AVERAGE-BANDWIDTH=4800000,RESOLUTION=1920x1080,CODECS="avc1.640029,mp4a.40.2"
 1080.m3u8
 `)
+		case "/pl.m3u8":
+			io.WriteString(w, `#EXTM3U
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio0",LANGUAGE="pl",NAME="Polski",AUTOSELECT=YES,DEFAULT=YES,URI="a.m3u8"
+#EXT-X-STREAM-INF:BANDWIDTH=5118260,RESOLUTION=1920x1080,CODECS="avc1.640029,mp4a.40.2",AUDIO="audio0"
+1080.m3u8
+`)
 		case "/720.m3u8":
 			io.WriteString(w, `#EXTM3U
 #EXT-X-STREAM-INF:BANDWIDTH=3598429,RESOLUTION=1280x720,CODECS="avc1.64001f,mp4a.40.2"
@@ -67,9 +73,9 @@ func (f *fakeProvider) Search(_ context.Context, q provider.Query) ([]provider.I
 	return f.items, nil
 }
 
-// Resolve gives a 1080p stream, or by ID prefix: "720" a 720p one, "drm"
-// none, "down" one whose playlist can't be fetched, and "stall" one whose
-// playlist never comes.
+// Resolve gives a 1080p stream, or by ID prefix: "720" a 720p one, "pl" a
+// 1080p one with Polish audio, "drm" none, "down" one whose playlist can't
+// be fetched, and "stall" one whose playlist never comes.
 func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, error) {
 	f.resolves.Add(1)
 	switch {
@@ -77,6 +83,8 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 		return provider.Stream{URL: streams.URL + "/stall.m3u8"}, nil
 	case strings.HasPrefix(id, "720"):
 		return provider.Stream{URL: streams.URL + "/720.m3u8"}, nil
+	case strings.HasPrefix(id, "pl"):
+		return provider.Stream{URL: streams.URL + "/pl.m3u8"}, nil
 	case strings.HasPrefix(id, "drm"):
 		return provider.Stream{}, fmt.Errorf("%w: DRM-protected", provider.ErrUnavailable)
 	case strings.HasPrefix(id, "down"):
@@ -362,6 +370,17 @@ func TestReleaseTitle(t *testing.T) {
 		{provider.Query{Title: "Ranczo"}, provider.Item{Kind: provider.Episode, Season: 2, Episode: 1},
 			probe.Info{Width: 1024, Height: 576},
 			"Ranczo.S02E01.576p.WEB-DL-TVP"},
+		// The audio language follows the episode or year, as in scene names.
+		{provider.Query{Title: "L for Love"}, provider.Item{Kind: provider.Episode, Season: 27, Episode: 6},
+			probe.Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Language: "pl"},
+			"L.for.Love.S27E06.POLISH.1080p.WEB-DL.AAC.H.264-TVP"},
+		{provider.Query{Title: "Cube", Year: 1998}, provider.Item{Kind: provider.Movie, Year: 1997},
+			probe.Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Language: "pl"},
+			"Cube.1998.POLISH.1080p.WEB-DL.AAC.H.264-TVP"},
+		// A language Sonarr and Radarr can't read by name is left out.
+		{provider.Query{Title: "Cube", Year: 1998}, provider.Item{Kind: provider.Movie, Year: 1997},
+			probe.Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Language: "und"},
+			"Cube.1998.1080p.WEB-DL.AAC.H.264-TVP"},
 	}
 	for _, tt := range tests {
 		if got := ReleaseTitle("tvp", tt.q, tt.it, tt.info); got != tt.want {
@@ -370,8 +389,8 @@ func TestReleaseTitle(t *testing.T) {
 	}
 }
 
-// Releases are named with their stream's quality. Items that can't be
-// downloaded, or whose quality can't be read, are left out.
+// Releases are named with their stream's audio language and quality. Items
+// that can't be downloaded, or whose quality can't be read, are left out.
 func TestSearchNamesStreamQuality(t *testing.T) {
 	fp := &fakeProvider{items: []provider.Item{
 		{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1},
@@ -379,6 +398,7 @@ func TestSearchNamesStreamQuality(t *testing.T) {
 		{ID: "drm-3", Kind: provider.Episode, Season: 1, Episode: 3},
 		{ID: "down-4", Kind: provider.Episode, Season: 1, Episode: 4},
 		{ID: "5", Kind: provider.Episode, Season: 1, Episode: 5},
+		{ID: "pl-6", Kind: provider.Episode, Season: 1, Episode: 6},
 	}}
 	items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", url.Values{
 		"t": {"tvsearch"}, "q": {"Ranczo"}, "season": {"1"}, "apikey": {"secret"},
@@ -391,6 +411,7 @@ func TestSearchNamesStreamQuality(t *testing.T) {
 		"Ranczo.S01E01.1080p.WEB-DL.AAC.H.264-FAKE",
 		"Ranczo.S01E02.720p.WEB-DL.AAC.H.264-FAKE",
 		"Ranczo.S01E05.1080p.WEB-DL.AAC.H.264-FAKE",
+		"Ranczo.S01E06.POLISH.1080p.WEB-DL.AAC.H.264-FAKE",
 	}
 	if strings.Join(titles, "\n") != strings.Join(want, "\n") {
 		t.Errorf("titles:\n%s\nwant:\n%s", strings.Join(titles, "\n"), strings.Join(want, "\n"))
