@@ -1,5 +1,4 @@
-// Package nzb wraps a magnetowid job reference in an NZB document, which
-// Sonarr/Radarr pass unchanged from the indexer to the download client.
+// Package nzb carries job references from the indexer to the download client.
 package nzb
 
 import (
@@ -14,11 +13,8 @@ const (
 	metaType  = "magnetowid"
 )
 
-// ErrNotMagnetowid is returned by Decode for NZBs that carry no magnetowid
-// reference.
 var ErrNotMagnetowid = errors.New("nzb: not a magnetowid job")
 
-// Ref identifies content on a provider.
 type Ref struct {
 	Provider string `json:"provider"`
 	ID       string `json:"id"`
@@ -55,7 +51,6 @@ type segment struct {
 	ID     string `xml:",chardata"`
 }
 
-// Encode returns an NZB document carrying r.
 func Encode(r Ref) ([]byte, error) {
 	if r.Provider == "" || r.ID == "" {
 		return nil, errors.New("nzb: provider and id are required")
@@ -81,7 +76,6 @@ func Encode(r Ref) ([]byte, error) {
 	return append([]byte(xml.Header), body...), nil
 }
 
-// Decode extracts the magnetowid reference from an NZB document.
 func Decode(b []byte) (Ref, error) {
 	var doc document
 	if err := xml.Unmarshal(b, &doc); err != nil {

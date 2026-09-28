@@ -49,7 +49,6 @@ audio-only.m3u8
 #EXT-X-STREAM-INF:BANDWIDTH=300000,CODECS="avc1.4d401f,mp4a.40.2",AUDIO="a"
 video.m3u8
 `, Variant{URI: "video.m3u8", Bandwidth: 300000, Codecs: "avc1.4d401f,mp4a.40.2", audio: "a"}, "pl.m3u8", "pl", true},
-		// The rendition's LANGUAGE is the muxed audio's.
 		{"default audio muxed into the variant", `#EXTM3U
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",LANGUAGE="pl",DEFAULT=YES,AUTOSELECT=YES
 #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="en",LANGUAGE="en",URI="en.m3u8"
@@ -126,13 +125,11 @@ func TestLoad(t *testing.T) {
 		t.Errorf("master: got %+v (UA %q), want %+v", m, gotUA, want)
 	}
 
-	// After a redirect, renditions resolve against the final URL.
 	m, ok, err = Load(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/redirect/video-fmp4.m3u8"})
 	if err != nil || !ok || m != want {
 		t.Errorf("redirected master: got %+v, %v, %v; want %+v", m, ok, err, want)
 	}
 
-	// Media playlists aren't masters; non-HLS URLs aren't fetched.
 	for _, u := range []string{srv.URL + "/media.m3u8", srv.URL + "/video.mpd", srv.URL + "/film.mp4"} {
 		if _, ok, err := Load(ctx, srv.Client(), provider.Stream{URL: u}); ok || err != nil {
 			t.Errorf("%s: ok = %v, err = %v", u, ok, err)

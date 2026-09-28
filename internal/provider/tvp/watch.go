@@ -15,16 +15,13 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// watchKind is what a watch list holds, and the bucket it is saved in, by a
-// key and a watchRecord.
 type watchKind struct {
 	name   string // for errors
 	bucket []byte
 	check  func(key string, r watchRecord) error // a failure fails startup
 }
 
-// seriesWatch holds the series Sonarr has searched for by TVDB ID, keyed by
-// the ID in decimal.
+// Series watch keys are decimal TVDB IDs.
 var seriesWatch = watchKind{
 	name:   "series",
 	bucket: []byte("tvp-watch"),
@@ -36,7 +33,6 @@ var seriesWatch = watchKind{
 	},
 }
 
-// filmWatch holds the films Radarr has searched for, keyed by filmKey.
 var filmWatch = watchKind{
 	name:   "film",
 	bucket: []byte("tvp-watch-films"),
@@ -48,24 +44,20 @@ var filmWatch = watchKind{
 	},
 }
 
-// filmKey tells films apart as Radarr's search does, by title and year.
+// Match Radarr's title-and-year identity.
 func filmKey(title string, year int) string {
 	return strconv.Itoa(year) + " " + provider.NormalizeTitle(title)
 }
 
-// watchRecord is JSON so fields can be added.
 type watchRecord struct {
 	Added time.Time `json:"added"`
-	// For films, the title and year Radarr searched with, which name the
-	// release.
+	// Radarr's title and year, used for release names.
 	Title string `json:"title,omitempty"`
 	Year  int    `json:"year,omitempty"`
 }
 
-// watchList is what Sonarr or Radarr has searched for, whose new releases
-// the feeds offer. Entries stay on it: a series that has ended has no new
-// episodes, so it costs no TVP requests, and a film only has to be matched
-// against TVP's newest. It is safe for concurrent use.
+// Watch lists are safe for concurrent use and retain entries indefinitely.
+// Ended series cost no TVP requests; films are checked only against recent additions.
 type watchList struct {
 	db   *bolt.DB // nil keeps the list in memory only
 	kind watchKind
@@ -74,7 +66,6 @@ type watchList struct {
 	records map[string]watchRecord
 }
 
-// loadWatchList loads the list saved in db.
 func loadWatchList(db *bolt.DB, kind watchKind) (*watchList, error) {
 	w := &watchList{db: db, kind: kind, records: make(map[string]watchRecord)}
 	if db == nil {
@@ -103,8 +94,7 @@ func loadWatchList(db *bolt.DB, kind watchKind) (*watchList, error) {
 	return w, nil
 }
 
-// add watches r under key and reports whether the key is new to the list. A
-// new one is watched even if saving it fails, until magnetowid restarts.
+// Return whether the key is new. Failed saves remain active in memory until restart.
 func (w *watchList) add(key string, r watchRecord) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -128,7 +118,7 @@ func (w *watchList) add(key string, r watchRecord) (bool, error) {
 	return true, nil
 }
 
-// ids returns the watched TVDB IDs of a series list in order.
+// Return sorted TVDB IDs.
 func (w *watchList) ids() []int {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -142,7 +132,7 @@ func (w *watchList) ids() []int {
 	return ids
 }
 
-// all returns the records, oldest first.
+// Return records in insertion order.
 func (w *watchList) all() []watchRecord {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -163,8 +153,7 @@ func (w *watchList) all() []watchRecord {
 	return rs
 }
 
-// watch adds the series to the watch list. A new one makes the feed stale,
-// so it joins the feed at the next RSS sync.
+// A newly watched series makes the feed stale for the next RSS sync.
 func (p *Provider) watch(tvdbID int, title string) {
 	isNew, err := p.watchedSeries.add(strconv.Itoa(tvdbID), watchRecord{})
 	if !isNew {
@@ -177,8 +166,7 @@ func (p *Provider) watch(tvdbID int, title string) {
 	}
 }
 
-// watchFilm adds a film Radarr searched for to the watch list. The feed isn't
-// made stale: TVP has just been searched for the film.
+// Do not invalidate the feed: this film was just searched.
 func (p *Provider) watchFilm(title string, year int) {
 	isNew, err := p.watchedFilms.add(filmKey(title, year), watchRecord{Title: title, Year: year})
 	if !isNew {

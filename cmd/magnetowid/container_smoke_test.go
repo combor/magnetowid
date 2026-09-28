@@ -13,11 +13,7 @@ import (
 	"time"
 )
 
-// TestContainerServesAPIs starts the container image with nothing but an API
-// key, as an operator would, and checks that it passes its startup checks
-// (ffmpeg on PATH, a writable download directory) and answers both APIs. Set
-// MAGNETOWID_SMOKE_IMAGE to the image under test, or run `make docker-smoke`,
-// which builds it first.
+// Set MAGNETOWID_SMOKE_IMAGE, or run make docker-smoke to build it first.
 func TestContainerServesAPIs(t *testing.T) {
 	image := os.Getenv("MAGNETOWID_SMOKE_IMAGE")
 	if image == "" {
@@ -40,7 +36,6 @@ func TestContainerServesAPIs(t *testing.T) {
 	addr, _, _ := strings.Cut(docker(ctx, t, "port", id, "8484/tcp"), "\n")
 	checkAPIs(ctx, t, "http://"+addr, apiKey, "/downloads") // the image default
 
-	// The image's health check runs `magnetowid -healthcheck`.
 	for {
 		status := docker(ctx, t, "inspect", "-f", "{{.State.Health.Status}}", id)
 		if status == "healthy" {
@@ -52,20 +47,17 @@ func TestContainerServesAPIs(t *testing.T) {
 		time.Sleep(time.Second)
 	}
 
-	// LookPath at startup only proves ffmpeg exists; this proves it runs.
+	// LookPath proves ffmpeg exists; executing it also checks runtime dependencies.
 	if out := docker(ctx, t, "exec", id, "ffmpeg", "-hide_banner", "-version"); !strings.HasPrefix(out, "ffmpeg version") {
 		t.Errorf("ffmpeg -version printed %q", out)
 	}
 }
 
-// checkAPIs waits for magnetowid at base to answer, then checks both APIs and
-// that finished downloads go to downloadDir.
 func checkAPIs(ctx context.Context, t *testing.T, base, apiKey, downloadDir string) {
 	t.Helper()
 	wait, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 
-	// The server only listens once its startup checks have passed.
 	var version struct{ Version string }
 	for {
 		err := getJSON(wait, base+"/api?mode=version&apikey="+apiKey, &version)
@@ -103,7 +95,6 @@ func checkAPIs(ctx context.Context, t *testing.T, base, apiKey, downloadDir stri
 	}
 }
 
-// docker runs a docker subcommand and returns its trimmed stdout.
 func docker(ctx context.Context, t *testing.T, args ...string) string {
 	t.Helper()
 	out, err := exec.CommandContext(ctx, "docker", args...).Output()

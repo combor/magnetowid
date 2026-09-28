@@ -17,8 +17,7 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// makeHLS writes a TVP-like HLS stream into dir: fMP4 video variants
-// stream_0 (160x120) and stream_1 (80x60), audio rendition stream_2.
+// Fixture variants: stream_0 (160x120), stream_1 (80x60), audio in stream_2.
 func makeHLS(t *testing.T, dir string) {
 	t.Helper()
 	encoders, _ := exec.Command("ffmpeg", "-hide_banner", "-encoders").Output()
@@ -75,7 +74,6 @@ func TestFFmpegDownloadsHLS(t *testing.T) {
 	if badUA != "" {
 		t.Errorf("request with User-Agent %q", badUA)
 	}
-	// Only the best variant and the audio rendition are fetched.
 	for _, p := range paths {
 		if strings.Contains(p, "_1") {
 			t.Errorf("lower variant fetched: %s", p)
@@ -117,7 +115,6 @@ func TestFFmpegReportsErrors(t *testing.T) {
 	}
 }
 
-// segmentPath returns the URL path of the n-th segment in playlist dir/name.
 func segmentPath(t *testing.T, dir, name string, n int) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join(dir, name))
@@ -159,7 +156,6 @@ func TestFFmpegFailsOnMissingSegment(t *testing.T) {
 	}
 }
 
-// A CDN that accepts a request and then goes silent must not hang the job.
 func TestFFmpegStallTimeout(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
@@ -251,10 +247,8 @@ video.m3u8
 		path string
 		want []string
 	}{
-		// ffmpeg gets the best variant and, if separate, its audio.
 		{"/split.m3u8", []string{srv.URL + "/video.m3u8", srv.URL + "/audio.m3u8"}},
 		{"/muxed.m3u8", []string{srv.URL + "/high.m3u8"}},
-		// Anything else is passed through.
 		{"/media.m3u8", []string{srv.URL + "/media.m3u8"}},
 		{"/film.mp4", []string{srv.URL + "/film.mp4"}},
 	} {

@@ -68,9 +68,6 @@ www.tvp.pl/dostepnosc
 	}
 }
 
-// Other TTML: the older DFXP namespace, styles by reference, times relative
-// to a div, durations, frames, whitespace across lines, and paragraphs out of
-// order.
 func TestTTMLToSRTOtherForms(t *testing.T) {
 	ttml := `<tt xmlns="http://www.w3.org/2006/10/ttaf1" xmlns:tts="http://www.w3.org/2006/10/ttaf1#styling"
     xmlns:ttp="http://www.w3.org/2006/10/ttaf1#parameter" ttp:frameRate="25">

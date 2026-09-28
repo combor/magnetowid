@@ -19,11 +19,8 @@ import (
 	"github.com/combor/magnetowid/internal/subtitles"
 )
 
-// TestLive checks the real TVP API, Skyhook and Wikidata for what magnetowid
-// reads from them, which the other tests here and cmd/magnetowid's fakes
-// stand in for. None of them promises to stay the same. Set MAGNETOWID_LIVE
-// to run it; CI runs it daily. Outside Poland TVP refuses streams, which
-// counts as working.
+// Set MAGNETOWID_LIVE to check TVP, Skyhook, and Wikidata; CI runs this daily.
+// TVP refusing streams outside Poland is an expected result.
 func TestLive(t *testing.T) {
 	if os.Getenv("MAGNETOWID_LIVE") == "" {
 		t.Skip("MAGNETOWID_LIVE is unset")
@@ -56,7 +53,6 @@ func TestLive(t *testing.T) {
 		if !ok {
 			return
 		}
-		// TVP's own series have subtitles for the deaf and hard of hearing.
 		i := slices.IndexFunc(stream.Subtitles, func(sub provider.Subtitle) bool { return sub.Language == "pol" && sub.SDH })
 		if i < 0 {
 			t.Fatalf("subtitles %+v, want Polish ones for the deaf and hard of hearing", stream.Subtitles)
@@ -86,7 +82,7 @@ func TestLive(t *testing.T) {
 		if len(films) < 10 {
 			t.Fatalf("%d of TVP's %d newest products are free films with a title, year and date", len(films), len(res.Items))
 		}
-		// The search gives original titles; a film just added may not be in it yet.
+		// New films may appear in listings before search indexes them.
 		for _, v := range films[:10] {
 			if _, found, err := p.originalTitle(ctx, v); err != nil {
 				t.Fatal(err)
@@ -124,9 +120,7 @@ func TestLive(t *testing.T) {
 	})
 }
 
-// checkStream checks that the item resolves to an HLS stream whose audio
-// has a language, and returns it, or that it is refused for being outside
-// Poland.
+// A region block is expected outside Poland.
 func checkStream(ctx context.Context, t *testing.T, p *Provider, client *http.Client, id string) (provider.Stream, bool) {
 	t.Helper()
 	s, err := p.Resolve(ctx, id)

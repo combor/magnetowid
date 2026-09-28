@@ -20,18 +20,15 @@ import (
 
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
-// FFmpeg is an Engine that has ffmpeg fetch the stream and remux it into MP4.
+// FFmpeg remuxes streams into MP4 without transcoding.
 type FFmpeg struct {
 	Path   string       // binary; "ffmpeg" if empty
 	Client *http.Client // for HLS master playlists; defaultClient if nil
-	// StallTimeout kills ffmpeg when no data arrives for this long; 5 minutes
-	// if zero, to cover the +faststart pass, which reports no progress.
+	// Zero defaults to 5 minutes, allowing for +faststart's silent final pass.
 	StallTimeout time.Duration
 }
 
-// pickInputs returns the URLs ffmpeg should read. For an HLS master playlist
-// it picks the best video variant and its audio rendition, since ffmpeg would
-// otherwise probe every variant first. Other URLs are passed through.
+// Select HLS inputs before invoking ffmpeg, which otherwise probes every variant.
 func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]string, error) {
 	m, ok, err := hls.Load(ctx, client, s)
 	if err != nil {
@@ -95,8 +92,7 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.WaitDelay = 5 * time.Second
-	// A terminal's Ctrl+C must reach only magnetowid, which stops ffmpeg and
-	// requeues the job. An ffmpeg that exited first would use up a retry.
+	// Isolate ffmpeg from terminal signals so magnetowid can requeue interrupted jobs.
 	cmd.SysProcAttr = ownProcessGroup()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -173,7 +169,6 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	return nil
 }
 
-// headerArgs turns extra request headers into ffmpeg input options.
 func headerArgs(h http.Header) []string {
 	var args []string
 	var lines strings.Builder
@@ -192,7 +187,6 @@ func headerArgs(h http.Header) []string {
 	return args
 }
 
-// readProgress parses ffmpeg's -progress output.
 func readProgress(r io.Reader, progress func(time.Duration, int64)) {
 	var done time.Duration
 	var size int64
@@ -218,7 +212,6 @@ func readProgress(r io.Reader, progress func(time.Duration, int64)) {
 	io.Copy(io.Discard, r)
 }
 
-// tailBuffer keeps the last max bytes written to it.
 type tailBuffer struct {
 	mu  sync.Mutex
 	max int

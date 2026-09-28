@@ -11,7 +11,6 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// requestCounter counts requests by path.
 type requestCounter struct {
 	next http.RoundTripper
 	mu   sync.Mutex
@@ -37,8 +36,7 @@ func countRequests(p *Provider) *requestCounter {
 	return c
 }
 
-// A season search's per-episode fallback asks for the same lists again;
-// TVP answers each once. Stream URLs are never reused.
+// Cache listings across repeated episode searches, but always resolve fresh stream URLs.
 func TestResponseCache(t *testing.T) {
 	p := newProvider(t)
 	requests := countRequests(p)

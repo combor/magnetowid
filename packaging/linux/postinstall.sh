@@ -1,6 +1,5 @@
 #!/bin/sh
-# deb and rpm postinstall. A deb upgrade passes "configure <old version>", an
-# rpm upgrade a count of 2 or more.
+# Upgrades pass "configure <old version>" for deb, a count of 2+ for rpm.
 set -e
 
 if command -v systemd-sysusers >/dev/null 2>&1; then

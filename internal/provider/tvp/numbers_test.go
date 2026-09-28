@@ -12,14 +12,11 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// soapNow is around when Hundreds' recent episodes air, to the minute like
-// the guide's times.
+// Match the guide's minute precision.
 var soapNow = time.Now().UTC().Truncate(time.Minute)
 
-// hundredsShow is Hundreds, TVP's Setki, a soap TVP keeps in blocks of 100.
-// TVDB's absolute numbers and titles number S19 and S20, whose air dates are
-// years from TVP's, and S1, which also counts from the first episode except
-// where they disagree (E4). The guide (hundredsGuide) numbers S27.
+// Hundreds (Setki) uses TVP blocks of 100. S1 has a conflicting E4;
+// S19/S20 have incorrect years; the guide supplies S27 numbers.
 func hundredsShow(now time.Time) string {
 	aired := func(d time.Duration) string { return now.Add(d).Format(time.RFC3339) }
 	return fmt.Sprintf(`{"tvdbId":7,"title":"Hundreds","episodes":[
@@ -41,8 +38,7 @@ func hundredsShow(now time.Time) string {
 		aired(-30*24*time.Hour), aired(-8*24*time.Hour), aired(-7*24*time.Hour), aired(-24*time.Hour), aired(12*time.Hour))
 }
 
-// hundredsGuide is TVP's number for each of Hundreds' broadcasts in the
-// guide, by Unix time: S27E05-E08. S27E01 aired before the guide's window.
+// Guide times for S27E05–E08; S27E01 is outside its retention window.
 var hundredsGuide = map[int64]int{
 	soapNow.Add(-8 * 24 * time.Hour).Unix(): 1941,
 	soapNow.Add(-7 * 24 * time.Hour).Unix(): 1942,
@@ -58,8 +54,6 @@ func hundredsProgrammes(at time.Time) []programme {
 	return []programme{{Title: fmt.Sprintf("Setki - odc. %d", n), Since: at.Add(5 * time.Minute).Format(time.RFC3339)}}
 }
 
-// newSoapProvider is a provider that knows Hundreds, and the times its
-// guide was asked about.
 func newSoapProvider(t *testing.T) (*Provider, *guideRequests) {
 	t.Helper()
 	serve, guide := serveGuide(t, hundredsProgrammes)
@@ -115,8 +109,7 @@ func TestSearchTVDBSoap(t *testing.T) {
 	}
 }
 
-// Only a season with recent episodes needs the guide, so older seasons are
-// found while it fails.
+// Old-season searches must work without the guide.
 func TestSearchTVDBSoapGuideDown(t *testing.T) {
 	p := newProviderWith(t, func(key string) (string, bool) {
 		return "500", strings.HasPrefix(key, "/lives/programmes?")
@@ -132,7 +125,6 @@ func TestSearchTVDBSoapGuideDown(t *testing.T) {
 	}
 }
 
-// The feed offers a soap's new episodes, numbered by the guide.
 func TestFeedRebuildSoap(t *testing.T) {
 	p, _ := newSoapProvider(t)
 	p.watch(7, "Hundreds")

@@ -1,5 +1,4 @@
-// Package hls reads HLS master playlists and picks the variant magnetowid
-// downloads.
+// Package hls selects video and audio from HLS master playlists.
 package hls
 
 import (
@@ -29,16 +28,15 @@ type Variant struct {
 	audio         string // AUDIO group ID
 }
 
-// Master is a master playlist's best video variant and its audio rendition,
-// with URIs resolved against the playlist's final URL.
+// Master holds the selected streams, with URLs resolved after redirects.
 type Master struct {
 	Video         Variant
 	Audio         string // "" when the audio is in the variant
-	AudioLanguage string // the audio rendition's LANGUAGE (RFC 5646, e.g. "pl"); "" if not given
+	AudioLanguage string // RFC 5646 LANGUAGE tag, e.g. "pl"; empty if absent
 }
 
-// Load fetches s and picks its best variant. ok is false when s isn't an HLS
-// master playlist; URLs not ending in .m3u8 aren't fetched.
+// Load selects streams from an HLS master playlist. Non-master playlists return
+// ok=false; URLs without a .m3u8 suffix are not fetched.
 func Load(ctx context.Context, client *http.Client, s provider.Stream) (m Master, ok bool, err error) {
 	base, err := url.Parse(s.URL)
 	if err != nil || !strings.HasSuffix(strings.ToLower(base.Path), ".m3u8") {
@@ -83,9 +81,7 @@ type rendition struct {
 	isDefault, autoPick  bool
 }
 
-// selectRenditions returns the best video variant and its audio rendition,
-// if the playlist describes one. The rendition's URI is "" when the audio is
-// in the variant. ok is false for anything but a usable master playlist.
+// An empty audio URI means muxed audio; ok=false means no usable master playlist.
 func selectRenditions(playlist string) (video Variant, audio rendition, ok bool) {
 	var variants []Variant
 	var audios []rendition
@@ -137,8 +133,7 @@ func selectRenditions(playlist string) (video Variant, audio rendition, ok bool)
 	return best, pickAudio(audios, best.audio), true
 }
 
-// pickAudio returns the group's DEFAULT, else AUTOSELECT, else first
-// rendition. A zero rendition means the variant has no audio group.
+// Prefer DEFAULT, then AUTOSELECT, then the group's first rendition.
 func pickAudio(audios []rendition, group string) rendition {
 	if group == "" {
 		return rendition{}
@@ -168,7 +163,7 @@ func pickAudio(audios []rendition, group string) rendition {
 	return rendition{}
 }
 
-// hasVideo reports whether CODECS names a video codec; an empty CODECS counts.
+// Missing CODECS is treated as video.
 func hasVideo(codecs string) bool {
 	if codecs == "" {
 		return true
@@ -184,7 +179,6 @@ func hasVideo(codecs string) bool {
 	return false
 }
 
-// dimensions parses a RESOLUTION such as "1920x1080"; 0, 0 if absent.
 func dimensions(resolution string) (width, height int) {
 	w, h, ok := strings.Cut(resolution, "x")
 	if !ok {
@@ -195,7 +189,6 @@ func dimensions(resolution string) (width, height int) {
 	return width, height
 }
 
-// parseAttrs parses an HLS attribute list.
 func parseAttrs(s string) map[string]string {
 	attrs := map[string]string{}
 	for s != "" {

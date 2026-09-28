@@ -1,8 +1,7 @@
-# Settings go in /etc/magnetowid/magnetowid.env. To change the unit itself, run
-# `systemctl edit magnetowid`; package updates overwrite this file.
+# Settings: /etc/magnetowid/magnetowid.env. Use `systemctl edit magnetowid`
+# for unit overrides; package updates overwrite this file.
 #
-# magnetowid runs in the media group used by the Sonarr and Radarr packages, so
-# they can move its downloads. To share through a different group, override:
+# To share downloads through a group other than media, override:
 #
 #   [Service]
 #   Group=yourgroup
@@ -24,11 +23,9 @@ ExecStart=/usr/bin/magnetowid
 StateDirectory=magnetowid
 Restart=on-failure
 RestartSec=10
-# Only magnetowid gets SIGTERM: it stops ffmpeg and requeues the download
-# itself. An ffmpeg stopped first would use up one of the job's retries.
+# Let magnetowid stop ffmpeg; stopping ffmpeg first would consume a job retry.
 KillMode=mixed
 
-# Hardening
 CapabilityBoundingSet=
 LockPersonality=true
 MemoryDenyWriteExecute=true
@@ -44,8 +41,7 @@ ProtectKernelLogs=true
 ProtectKernelModules=true
 ProtectKernelTunables=true
 ProtectProc=invisible
-# Not strict, so the download folder can be anywhere the magnetowid user can
-# write.
+# Allow downloads outside system directories without a ReadWritePaths override.
 ProtectSystem=full
 RemoveIPC=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK

@@ -43,7 +43,7 @@ notarize:
         issuer_id: '{{ .Env.MACOS_NOTARY_ISSUER_ID }}'
         key_id: '{{ .Env.MACOS_NOTARY_KEY_ID }}'
         key: '{{ .Env.MACOS_NOTARY_KEY }}'
-        # Waiting for Apple's verdict keeps a rejected binary out of the archives.
+        # Do not archive binaries Apple rejects.
         wait: true
         timeout: 20m
 
@@ -56,7 +56,7 @@ archives:
       - goos: windows
         formats:
           - zip
-    # The AUR package installs the systemd files from the archive.
+    # AUR installs systemd files from this archive.
     files:
       - LICENSE
       - README.md
@@ -88,7 +88,7 @@ nfpms:
       - ffmpeg
     overrides:
       rpm:
-        # Fedora's ffmpeg-free provides the binary but not the ffmpeg name.
+        # Fedora's ffmpeg-free provides the binary, not the ffmpeg package name.
         dependencies:
           - ca-certificates
           - /usr/bin/ffmpeg
@@ -178,7 +178,7 @@ nix:
     description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
     license: bsd3
     main_program: magnetowid
-    # The default install script wraps magnetowid with ffmpeg on PATH.
+    # The generated wrapper adds ffmpeg to PATH.
     dependencies:
       - ffmpeg
     extra_install: |-

@@ -15,8 +15,7 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// A terminal's Ctrl+C goes to its whole foreground process group, so ffmpeg
-// must lead a group of its own.
+// Terminal Ctrl+C reaches the whole foreground process group.
 func TestFFmpegRunsInOwnProcessGroup(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "pid")

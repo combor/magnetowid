@@ -45,7 +45,6 @@ func newServer(t *testing.T, runWorker bool) (*httptest.Server, *downloader.Queu
 	return newServerOn(t, openDB(t), runWorker)
 }
 
-// openDB opens a database in a temporary folder until the test ends.
 func openDB(t *testing.T) *bolt.DB {
 	t.Helper()
 	db, err := store.Open(t.TempDir())
@@ -56,7 +55,6 @@ func openDB(t *testing.T) *bolt.DB {
 	return db
 }
 
-// newServerOn is newServer with the queue's jobs saved in db.
 func newServerOn(t *testing.T, db *bolt.DB, runWorker bool) (*httptest.Server, *downloader.Queue) {
 	t.Helper()
 	log := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -93,7 +91,6 @@ func call(t *testing.T, srv *httptest.Server, params url.Values) map[string]any 
 	return out
 }
 
-// addFile uploads an NZB the way Sonarr/Radarr do, with the default priority.
 func addFile(t *testing.T, srv *httptest.Server, filename string, body []byte) map[string]any {
 	t.Helper()
 	return addFileWithPriority(t, srv, filename, body, "-100")
@@ -221,8 +218,6 @@ func TestParsePriority(t *testing.T) {
 	}
 }
 
-// Sonarr's Paused priority adds the job paused, and the SABnzbd API pauses
-// and resumes single jobs and the whole queue.
 func TestPause(t *testing.T) {
 	srv, q := newServer(t, true)
 	out := addFileWithPriority(t, srv, "A.nzb", magnetowidNZB(t), "-2")
@@ -313,7 +308,6 @@ func TestHistoryAndDelete(t *testing.T) {
 	}
 }
 
-// When a change can't be saved, the *arr is told it failed.
 func TestUnsavedChangesFail(t *testing.T) {
 	db := openDB(t)
 	srv, q := newServerOn(t, db, false)
@@ -330,7 +324,6 @@ func TestUnsavedChangesFail(t *testing.T) {
 	}
 }
 
-// Sonarr/Radarr page history with start and limit.
 func TestHistoryPaging(t *testing.T) {
 	srv, _ := newServer(t, true)
 	for _, name := range []string{"A.nzb", "B.nzb", "C.nzb"} {
@@ -358,7 +351,6 @@ func TestHistoryPaging(t *testing.T) {
 	}
 }
 
-// The key is checked before any upload is read, and uploads are capped.
 func TestUploadLimits(t *testing.T) {
 	srv, q := newServer(t, false)
 	post := func(query url.Values, size int) map[string]any {

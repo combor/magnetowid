@@ -23,19 +23,14 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// bytesPerSecond estimates release size (4 Mbit/s) when the stream gives no
-// bandwidth.
+// Assume 4 Mbit/s when the stream omits bandwidth.
 const bytesPerSecond = 4_000_000 / 8
 
-// maxResults is the page size advertised in caps.
 const maxResults = 100
 
-// probeWorkers bounds the streams one search probes at once.
 const probeWorkers = 4
 
-// Sonarr and Radarr give up on a request after 100 s, so probing stops after
-// probeBudget or answerWithin after the request came, whichever is first.
-// Streams not read by then are left out.
+// Leave time to respond before Sonarr/Radarr's 100-second timeout.
 const (
 	probeBudget  = 45 * time.Second
 	answerWithin = 90 * time.Second
@@ -52,7 +47,7 @@ const (
 type Handler struct {
 	Providers *provider.Registry
 	APIKey    string
-	Probe     *probe.Prober // reads each release's quality
+	Probe     *probe.Prober
 	Log       *slog.Logger
 
 	feeds rssFeeds
@@ -69,8 +64,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	q := r.URL.Query()
 	t := q.Get("t")
-	// caps is public, as on most Newznab indexers. The key is compared in
-	// constant time, so response times don't give it away.
+	// Newznab capabilities are public.
 	if t != "caps" && subtle.ConstantTimeCompare([]byte(q.Get("apikey")), []byte(h.APIKey)) != 1 {
 		writeError(w, 100, "Incorrect user credentials")
 		return
@@ -95,8 +89,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	text := strings.TrimSpace(q.Get("q"))
 	tvdbID, _ := strconv.Atoi(q.Get("tvdbid"))
 	if text == "" && (movie || tvdbID <= 0) {
-		// A search by TVDB ID never gets the feed's placeholder: Sonarr would
-		// skip its title search.
+		// A placeholder here would suppress Sonarr's fallback to title search.
 		h.rss(w, r, p, movie, start)
 		return
 	}
@@ -150,12 +143,8 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	writeXML(w, h.feed(p, items))
 }
 
-// rss serves RSS sync and the indexer test: the provider's new releases,
-// newest first, then a placeholder. Being unparseable, it is never grabbed.
-// The indexer test fails on an empty feed, which the placeholder stands in
-// for. And Sonarr warns of a gap in the feed unless it finds again the
-// release it saw newest last time, which is the placeholder if the feed held
-// nothing else.
+// The unparseable placeholder keeps empty feeds valid for indexer tests and
+// prevents Sonarr from reporting an RSS gap when real releases first appear.
 func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provider, movie bool, start time.Time) {
 	kind := provider.Episode
 	if movie {
@@ -178,8 +167,7 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provide
 		}
 		cur = h.feeds.begin(feed, releases)
 	}
-	// Ties are broken so pages don't shift between requests. The list is
-	// shared, so it is sorted as a copy.
+	// Sort a copy with stable ties so concurrent requests cannot shift pages.
 	releases := slices.Clone(cur.releases)
 	failed := h.feeds.redate(feed, releases, cur.began)
 	slices.SortFunc(releases, func(a, b provider.Release) int {
@@ -193,21 +181,16 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provide
 	for _, rel := range pg {
 		items = append(items, h.release(r, p, provider.Query{Kind: rel.Kind, Title: rel.Title}, rel.Item, rel.info))
 	}
-	// Once, after the last release that can be read, so paging ends.
+	// Emit the placeholder only once so pagination terminates.
 	if n := len(res.read); off <= n && n < off+lim {
 		items = append(items, h.placeholder(r, p, movie))
 	}
 	writeXML(w, h.feed(p, items))
 }
 
-// probePage probes releases in order until the page from off, lim long, is
-// full, and returns it with what probing found. Sonarr/Radarr ask for the
-// next offset whenever a page is full. Releases left out while probing
-// mustn't shorten a full page, so enough are probed to fill it, and no more.
+// Fill the page despite failed probes. Sonarr/Radarr stop paging at a short page.
 func (h *Handler) probePage(ctx context.Context, start time.Time, p provider.Provider, releases []provider.Release, off, lim int) ([]probed, probeResult) {
-	// Right after the last release, they are all probed again, so the RSS
-	// feed knows if the last page was full of them. The page before read
-	// them, so the prober remembers them.
+	// Recheck cached probes at the end to determine whether the last page was full.
 	want := off + lim
 	if off < 0 || off > len(releases) {
 		want = 0
@@ -226,34 +209,25 @@ func (h *Handler) probePage(ctx context.Context, start time.Time, p provider.Pro
 	return page(res.read, off, lim), res
 }
 
-// rssFeeds keeps what RSS sync needs across requests, by feed: the sync in
-// progress, and the releases held back because their streams couldn't be
-// read in time. Sonarr reads further pages only until one holds the newest
-// release it saw before, so a release read later could stay on a page it
-// never reads. Instead, a held release comes first until it is offered, and
-// is dated then.
+// rssFeeds preserves pagination and tracks releases deferred by failed probes.
+// Date them when first offered so Sonarr sees them before its RSS cutoff.
 type rssFeeds struct {
 	mu    sync.Mutex
 	syncs map[string]feedSync
 	held  map[string]map[string]heldRelease // then by release ID
 }
 
-// feedSync is an RSS sync, which asks for offset 0 first and pages on from
-// there. Its pages come from the releases listed when it began, so they don't
-// shift if the provider's list changes meanwhile.
+// Snapshot the feed at offset 0 so provider updates cannot shift later pages.
 type feedSync struct {
 	began    time.Time
 	releases []provider.Release
 }
 
-// heldRelease is when a held release was offered, zero until then, and when
-// a sync last found its stream unreadable.
 type heldRelease struct {
 	offered, failed time.Time
 }
 
-// current returns the sync in progress that asks for the page at off.
-// Offset 0 begins a new one.
+// Offset 0 starts a new sync.
 func (fs *rssFeeds) current(feed string, off int) (feedSync, bool) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -261,8 +235,7 @@ func (fs *rssFeeds) current(feed string, off int) (feedSync, bool) {
 	return cur, ok && off != 0
 }
 
-// begin begins a sync of the releases. Held releases are dated by when it
-// began, so pages don't shift while Sonarr reads them.
+// Use one timestamp throughout a sync to keep deferred releases on stable pages.
 func (fs *rssFeeds) begin(feed string, releases []provider.Release) feedSync {
 	cur := feedSync{began: time.Now(), releases: releases}
 	fs.mu.Lock()
@@ -274,10 +247,8 @@ func (fs *rssFeeds) begin(feed string, releases []provider.Release) feedSync {
 	return cur
 }
 
-// redate dates the held releases by when they were offered, or by when this
-// sync began if they haven't been yet. For the latter, it returns when they
-// last failed: those not tried for longest are probed first, so releases that
-// keep failing can't use up every sync's probing time.
+// Undelivered releases get this sync's timestamp and their last failure time.
+// Probe the least recently tried first so persistent failures cannot starve others.
 func (fs *rssFeeds) redate(feed string, releases []provider.Release, began time.Time) (failed map[string]time.Time) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -296,9 +267,6 @@ func (fs *rssFeeds) redate(feed string, releases []provider.Release, began time.
 	return failed
 }
 
-// update holds the releases left out, and records when held ones were
-// offered or failed: when this sync began. It forgets releases gone from the
-// feed.
 func (fs *rssFeeds) update(feed string, releases []provider.Release, offered []probed, res probeResult, began time.Time) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -326,30 +294,23 @@ func (fs *rssFeeds) update(feed string, releases []provider.Release, offered []p
 	fs.held[feed] = held
 }
 
-// probed is a release with the quality of its stream.
 type probed struct {
 	provider.Release
 	info probe.Info
 }
 
-// probeResult is what probing releases found.
 type probeResult struct {
 	read                    []probed           // in order
-	failed                  []provider.Release // can't be downloaded, or their quality read
+	failed                  []provider.Release // unavailable or unreadable
 	late                    []provider.Release // not probed in time
 	unavailable, unreadable int
 }
 
-// probeUntil probes releases in order until want of them have a readable
-// quality. Releases that can't be downloaded (DRM, paid, region-blocked) or
-// whose quality can't be read are left out and counted, as are those not
-// probed in time.
 func (h *Handler) probeUntil(ctx context.Context, p provider.Provider, releases []provider.Release, want int) probeResult {
 	var res probeResult
 	var firstUnavailable error
 	next := 0
 	for next < len(releases) && len(res.read) < want && ctx.Err() == nil {
-		// Just enough for the page if all of them can be read.
 		batch := releases[next:min(next+want-len(res.read), len(releases))]
 		next += len(batch)
 		infos, errs := h.probeBatch(ctx, p, batch)
@@ -368,7 +329,7 @@ func (h *Handler) probeUntil(ctx context.Context, p provider.Provider, releases 
 				res.unavailable++
 				h.Log.Debug("release unavailable", "provider", p.Name(), "id", rel.ID, "title", rel.Item.Title, "err", err)
 			default:
-				// The first one is a warning: the site or network may be failing.
+				// Warn once per search; log further failures at debug level.
 				if res.unreadable == 0 && ctx.Err() == nil {
 					h.Log.Warn("can't read a release's quality; leaving it out", "provider", p.Name(), "id", rel.ID, "title", rel.Item.Title, "err", err)
 				} else {
@@ -389,11 +350,9 @@ func (h *Handler) probeUntil(ctx context.Context, p provider.Provider, releases 
 	return res
 }
 
-// errLate marks a probe cut short because probing ran out of time, which
-// says nothing about the stream.
+// Budget exhaustion says nothing about stream availability.
 var errLate = errors.New("not probed in time")
 
-// probeBatch probes releases, probeWorkers at a time.
 func (h *Handler) probeBatch(ctx context.Context, p provider.Provider, releases []provider.Release) ([]probe.Info, []error) {
 	infos := make([]probe.Info, len(releases))
 	errs := make([]error, len(releases))
@@ -413,9 +372,7 @@ func (h *Handler) probeBatch(ctx context.Context, p provider.Provider, releases 
 	return infos, errs
 }
 
-// searchTVDB serves Sonarr's search by TVDB ID alone. It finds nothing if
-// the provider can't search by TVDB ID or returns no title to name releases
-// with; Sonarr then searches by title.
+// No results or title makes Sonarr fall back to title search.
 func searchTVDB(ctx context.Context, p provider.Provider, tvdbID int, q provider.Query) (string, []provider.Item, error) {
 	ts, ok := p.(provider.TVDBSearcher)
 	if !ok {
@@ -445,9 +402,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request, p provider.Provide
 	w.Write(body)
 }
 
-// release turns a provider item into a Newznab item. It has no tvdbid attr:
-// Sonarr would match by it when the title doesn't, and it won't auto-import
-// a release matched only by ID.
+// Omit tvdbid: Sonarr will not auto-import releases matched only by ID.
 func (h *Handler) release(r *http.Request, p provider.Provider, q provider.Query, it provider.Item, info probe.Info) item {
 	secs := int(it.Duration / time.Second)
 	link := h.nzbLink(r, p, it.ID, secs)
@@ -473,9 +428,7 @@ func (h *Handler) release(r *http.Request, p provider.Provider, q provider.Query
 	}
 }
 
-// placeholderDate is long ago, so the placeholder is never newer than a
-// release Sonarr hasn't read: RSS sync reads further pages only until one
-// holds a release older than the newest it saw before.
+// Keep the placeholder older than real releases so it cannot advance Sonarr's RSS cutoff.
 var placeholderDate = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 
 func (h *Handler) placeholder(r *http.Request, p provider.Provider, movie bool) item {
@@ -498,10 +451,8 @@ func (h *Handler) placeholder(r *http.Request, p provider.Provider, movie bool) 
 	}
 }
 
-// ReleaseTitle builds a release name from the *arr's own query title and
-// year, so the release matches by title: Sonarr/Radarr won't auto-import a
-// release matched only by ID. The audio language and quality are the
-// stream's, so the ones they grab by are the ones they record on import.
+// Use the client's title and year for import matching, with the stream's language
+// and quality so selection agrees with the downloaded file.
 func ReleaseTitle(providerName string, q provider.Query, it provider.Item, info probe.Info) string {
 	title := strings.Join(strings.Fields(q.Title), ".")
 	if it.Kind == provider.Movie {
@@ -536,8 +487,7 @@ func (h *Handler) nzbLink(r *http.Request, p provider.Provider, id string, secs 
 	return h.baseURL(r, p) + "?" + v.Encode()
 }
 
-// baseURL is the URL the caller reached this indexer at, honouring a
-// TLS-terminating reverse proxy.
+// Honor reverse-proxy headers when constructing the public URL.
 func (h *Handler) baseURL(r *http.Request, p provider.Provider) string {
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(firstValue(r.Header.Get("X-Forwarded-Proto")), "https") {
@@ -550,13 +500,11 @@ func (h *Handler) baseURL(r *http.Request, p provider.Provider) string {
 	return scheme + "://" + host + "/" + p.Name() + "/api"
 }
 
-// firstValue returns the first entry of a comma-separated header value.
 func firstValue(v string) string {
 	first, _, _ := strings.Cut(v, ",")
 	return strings.TrimSpace(first)
 }
 
-// pageBounds parses Newznab offset and limit, capping limit at maxResults.
 func pageBounds(offset, limit string) (off, lim int) {
 	off, _ = strconv.Atoi(offset)
 	lim, err := strconv.Atoi(limit)
@@ -566,7 +514,6 @@ func pageBounds(offset, limit string) (off, lim int) {
 	return off, lim
 }
 
-// page returns the items from off, at most lim of them.
 func page[T any](items []T, off, lim int) []T {
 	if off < 0 || off >= len(items) {
 		return nil
@@ -576,7 +523,7 @@ func page[T any](items []T, off, lim int) []T {
 
 var trailingYear = regexp.MustCompile(`^(.*\S)\s+\(?((?:19|20)\d\d)\)?$`)
 
-// splitYear splits Radarr's "Title 1971" query into title and year.
+// Split Radarr's "Title 1971" query.
 func splitYear(s string) (string, int) {
 	m := trailingYear.FindStringSubmatch(s)
 	if m == nil {
@@ -632,8 +579,7 @@ type capsSearching struct {
 	MovieSearch capsSearch `xml:"movie-search"`
 }
 
-// SearchEngine "raw" makes Sonarr/Radarr send titles uncleaned ("The
-// Killing", not "Killing").
+// SearchEngine=raw preserves title prefixes such as "The".
 type capsSearch struct {
 	Available       string `xml:"available,attr"`
 	SupportedParams string `xml:"supportedParams,attr"`
@@ -646,8 +592,7 @@ type capsCat struct {
 	Subcats []capsCat `xml:"subcat"`
 }
 
-// caps advertises tvdbid for providers that can search by it. Sonarr then
-// searches by ID first, and by title only if that finds nothing.
+// Advertising tvdbid makes Sonarr try ID search before title search.
 func caps(providerName string, tvdbSearch bool) capsDoc {
 	tvParams := "q,season,ep"
 	if tvdbSearch {

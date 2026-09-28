@@ -4,8 +4,7 @@ package downloader
 
 import "syscall"
 
-// ownProcessGroup starts a process in a new process group, so signals sent to
-// the terminal's foreground group don't reach it.
+// Keep terminal signals from reaching ffmpeg.
 func ownProcessGroup() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setpgid: true}
 }

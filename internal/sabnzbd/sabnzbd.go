@@ -20,10 +20,9 @@ import (
 // version must be ≥ 0.7 for Sonarr/Radarr.
 const version = "4.5.1"
 
-// bytesPerSecond estimates job size before ffmpeg reports any (4 Mbit/s).
+// Assume 4 Mbit/s until ffmpeg reports progress.
 const bytesPerSecond = 4_000_000 / 8
 
-// maxBodyBytes caps NZB uploads.
 const maxBodyBytes = 4 << 20
 
 // Handler serves the SABnzbd API. Mount it at "/api".
@@ -41,7 +40,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if key == "" {
 		key = r.FormValue("apikey")
 	}
-	// In constant time, so response times don't give the key away.
 	if subtle.ConstantTimeCompare([]byte(key), []byte(h.APIKey)) != 1 {
 		writeJSON(w, errorResponse("API Key Incorrect"))
 		return
@@ -98,7 +96,7 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ref, err := nzb.Decode(data)
 	if err != nil {
-		// Not a magnetowid NZB; refusing it lets the *arr try elsewhere.
+		// Reject foreign NZBs so the client can try another source.
 		h.Log.Warn("rejected NZB", "file", header.Filename, "err", err)
 		writeJSON(w, errorResponse(err.Error()))
 		return
@@ -117,11 +115,10 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{id}})
 }
 
-// priorityNames are the SABnzbd priorities magnetowid supports, from -1.
+// Indexed from SABnzbd priority -1.
 var priorityNames = []string{"Low", "Normal", "High", "Force"}
 
-// parsePriority reads addfile's priority. The *arr default (-100) counts as
-// Normal, and Paused (-2) adds the job paused, at Normal.
+// Map the default (-100) and paused (-2) priorities to Normal; preserve the pause.
 func parsePriority(s string) (priority int, paused bool) {
 	p, err := strconv.Atoi(s)
 	switch {
@@ -145,7 +142,6 @@ func formFile(r *http.Request, fields ...string) (multipart.File, *multipart.Fil
 	return nil, nil, err
 }
 
-// pauseJobs pauses or resumes the jobs listed in value.
 func (h *Handler) pauseJobs(w http.ResponseWriter, r *http.Request, pause bool) {
 	f := h.Queue.ResumeJobs
 	if pause {
@@ -160,7 +156,6 @@ func (h *Handler) pauseJobs(w http.ResponseWriter, r *http.Request, pause bool) 
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": ids})
 }
 
-// jobIDs returns the comma-separated job IDs in value.
 func jobIDs(r *http.Request) []string {
 	var ids []string
 	for _, id := range strings.Split(r.FormValue("value"), ",") {
@@ -197,7 +192,7 @@ type category struct {
 	Priority int    `json:"priority"`
 }
 
-// config passes the connection test: categories exist, sorting is off.
+// The connection test requires existing categories and no server-side sorting.
 func (h *Handler) config() map[string]any {
 	cats := []category{{Name: "*", PP: "3", Script: "None", Dir: ""}}
 	for i, c := range h.Categories {
@@ -260,7 +255,6 @@ func (h *Handler) queue(cat string) map[string]any {
 	return map[string]any{"paused": h.Queue.Paused(), "slots": slots}
 }
 
-// slotStatus is a queued or running job's status as SABnzbd gives it.
 func slotStatus(j downloader.Job) string {
 	if j.Paused {
 		return "Paused"
@@ -280,8 +274,7 @@ type historySlot struct {
 	FailMessage  string `json:"fail_message"`
 }
 
-// history lists finished jobs, newest first like SABnzbd. It returns up to
-// limit (0 = all) of them after skipping start, and the total count.
+// History is newest first; limit=0 means all remaining jobs.
 func (h *Handler) history(cat string, start, limit int) map[string]any {
 	jobs := h.Queue.Jobs()
 	slots := []historySlot{}
@@ -311,7 +304,6 @@ func (h *Handler) history(cat string, start, limit int) map[string]any {
 	return map[string]any{"noofslots": total, "slots": slots}
 }
 
-// estimatedSize extrapolates from progress, or guesses from the duration.
 func estimatedSize(j downloader.Job) int64 {
 	if j.Fraction > 0.01 && j.Bytes > 0 {
 		return int64(float64(j.Bytes) / j.Fraction)

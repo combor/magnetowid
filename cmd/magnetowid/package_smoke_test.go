@@ -12,20 +12,15 @@ import (
 	"time"
 )
 
-// distro is a Linux distribution whose magnetowid package TestPackageService
-// installs.
 type distro struct {
-	name string
-	// dockerfile builds an image that can boot systemd.
+	name       string
 	dockerfile string
-	// Shell commands run in the container, which has the snapshot in /dist,
-	// packaging/linux in /packaging and the Go architecture in $GOARCH.
+	// Container mounts: snapshot at /dist, packaging files at /packaging;
+	// GOARCH selects the package architecture.
 	install, upgrade, remove string
-	// restarts is whether an upgrade restarts a running service. Arch leaves
-	// that to the operator.
+	// Arch upgrades leave service restarts to the operator.
 	restarts bool
-	// x264 is whether the distro's ffmpeg can encode the download engine tests'
-	// streams. Fedora's ffmpeg-free can't, so those tests skip there.
+	// Fedora's ffmpeg-free lacks the test streams' libx264 encoder.
 	x264 bool
 }
 
@@ -51,8 +46,7 @@ RUN dnf install -y systemd`,
 		restarts: true,
 	},
 	{
-		// Builds the package from the PKGBUILD that GoReleaser pushes to the AUR,
-		// which checks its checksums against the archive.
+		// Build the generated AUR PKGBUILD to verify its archive checksums.
 		name: "arch",
 		dockerfile: `FROM archlinux:latest
 RUN pacman -Syu --noconfirm --needed binutils debugedit fakeroot && useradd -m builder`,
@@ -72,10 +66,7 @@ pacman -U --noconfirm magnetowid-bin-*.pkg.tar.zst`,
 	},
 }
 
-// TestPackageService installs each Linux package from a GoReleaser snapshot in
-// a container that boots systemd, as an operator would, and takes the service
-// through its lifecycle. Set MAGNETOWID_SMOKE_DIST to the absolute path of the
-// snapshot's dist folder, or run `make package-smoke`, which builds it first.
+// Set MAGNETOWID_SMOKE_DIST to the snapshot directory, or run make package-smoke.
 func TestPackageService(t *testing.T) {
 	dist := os.Getenv("MAGNETOWID_SMOKE_DIST")
 	if dist == "" {
@@ -89,8 +80,7 @@ func TestPackageService(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Run under the unit's sandbox, the download engine's tests show that the
-	// hardening leaves ffmpeg working.
+	// Run engine tests under the unit's sandbox to check ffmpeg still works.
 	engineTests := filepath.Join(t.TempDir(), "engine.test")
 	build := exec.Command("go", "test", "-c", "-o", engineTests, "github.com/combor/magnetowid/internal/downloader")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
@@ -143,7 +133,7 @@ func testPackage(t *testing.T, d distro, dist, packaging, engineTests string) {
 	if groups := strings.Fields(c.sh(t, "id -nG magnetowid")); !slices.Contains(groups, "media") {
 		t.Errorf("magnetowid is in groups %q, want media", groups)
 	}
-	// The packaged settings have no API key, which magnetowid won't run without.
+	// Do not enable the service before an API key is configured.
 	if state, _ := c.try("systemctl is-enabled magnetowid"); state != "disabled" {
 		t.Errorf("installed service is %s, want disabled", state)
 	}
@@ -181,7 +171,6 @@ systemctl start magnetowid`)
 	if got := c.sh(t, "systemctl show -p MainPID --value magnetowid"); (got != pid) != d.restarts {
 		t.Errorf("upgrade changed the main PID from %s to %s, want a restart: %v", pid, got, d.restarts)
 	}
-	// Still serving, with the API key kept.
 	checkAPIs(ctx, t, base, apiKey, downloadDir)
 
 	c.sh(t, d.remove)
@@ -192,19 +181,16 @@ systemctl start magnetowid`)
 	c.sh(t, "test ! -e /etc/systemd/system/multi-user.target.wants/magnetowid.service")
 }
 
-// container is a running container.
 type container struct {
 	ctx context.Context
 	id  string
 }
 
-// try runs a shell script in the container and returns its trimmed output.
 func (c container) try(script string) (string, error) {
 	out, err := exec.CommandContext(c.ctx, "docker", "exec", c.id, "sh", "-c", script).CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
 
-// sh runs a shell script in the container, failing the test if it fails.
 func (c container) sh(t *testing.T, script string) string {
 	t.Helper()
 	out, err := c.try(script)
@@ -214,7 +200,6 @@ func (c container) sh(t *testing.T, script string) string {
 	return out
 }
 
-// await runs a shell script in the container until it prints one of want.
 func (c container) await(t *testing.T, script string, want ...string) {
 	t.Helper()
 	deadline := time.After(2 * time.Minute)

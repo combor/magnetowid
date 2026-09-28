@@ -23,14 +23,12 @@ import (
 	"github.com/combor/magnetowid/internal/store"
 )
 
-// fakeProvider can't be reached for the first offline resolves, then returns
-// err if set.
 type fakeProvider struct {
 	mu        sync.Mutex
 	resolves  int
 	offline   int
 	err       error
-	subtitles []provider.Subtitle // every stream's
+	subtitles []provider.Subtitle
 }
 
 func (f *fakeProvider) Name() string { return "fake" }
@@ -53,8 +51,6 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	return provider.Stream{URL: fmt.Sprintf("http://example.invalid/%s/%d.m3u8", id, f.resolves), Subtitles: f.subtitles}, nil
 }
 
-// fakeEngine fails the first fail calls and any stream URL containing failURL,
-// with err or else "boom".
 type fakeEngine struct {
 	mu      sync.Mutex
 	calls   int
@@ -83,7 +79,6 @@ func startQueue(t *testing.T, p *fakeProvider, e Engine) *Queue {
 	return startQueueWithDelay(t, p, e, 10*time.Millisecond)
 }
 
-// blockingEngine reports each download on started and holds it until cancelled.
 type blockingEngine struct {
 	started chan string
 }
@@ -94,8 +89,6 @@ func (e *blockingEngine) Download(ctx context.Context, s provider.Stream, _ stri
 	return ctx.Err()
 }
 
-// orderEngine records the streams it fetches and holds the first until
-// release is closed.
 type orderEngine struct {
 	mu      sync.Mutex
 	urls    []string
@@ -123,7 +116,6 @@ func startQueueWithDelay(t *testing.T, p *fakeProvider, e Engine, retryDelay tim
 	return q
 }
 
-// add queues a job named name with an NZB named after it.
 func add(t *testing.T, q *Queue, name, category string, priority int, ref nzb.Ref) string {
 	t.Helper()
 	id, err := q.Add(name, name+".nzb", category, priority, false, ref)
@@ -133,8 +125,7 @@ func add(t *testing.T, q *Queue, name, category string, priority int, ref nzb.Re
 	return id
 }
 
-// newQueue opens a queue and its database in dir, and closes the database
-// when the test ends. Tests close q.db to stop saving, or to reopen dir.
+// Tests may close q.db to simulate write failures or reopen the queue.
 func newQueue(t *testing.T, dir string, p provider.Provider, e Engine) *Queue {
 	t.Helper()
 	db, err := store.Open(dir)
@@ -149,7 +140,6 @@ func newQueue(t *testing.T, dir string, p provider.Provider, e Engine) *Queue {
 	return q
 }
 
-// run starts q's worker and returns a function that stops it and waits.
 func run(t *testing.T, q *Queue) (stop func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -165,7 +155,6 @@ func waitFinished(t *testing.T, q *Queue, id string) Job {
 	return waitJob(t, q, id, func(j Job) bool { return j.Status == StatusCompleted || j.Status == StatusFailed })
 }
 
-// waitJob polls until job id satisfies cond.
 func waitJob(t *testing.T, q *Queue, id string, cond func(Job) bool) Job {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -215,7 +204,6 @@ func TestSameNameGetsSuffix(t *testing.T) {
 	if want := filepath.Join(q.Dir(), "movies", "Movie.2020.1"); second.Storage != want {
 		t.Errorf("second storage = %q, want %q", second.Storage, want)
 	}
-	// Deleting one job with its files leaves the other intact.
 	q.Delete(second.ID, true)
 	if _, err := os.Stat(second.Storage); !os.IsNotExist(err) {
 		t.Errorf("second folder still there: %v", err)
@@ -252,7 +240,6 @@ func TestGivesUpAfterFiveRetries(t *testing.T) {
 	}
 }
 
-// A job waiting to retry must not hold up the rest of the queue.
 func TestRetryWaitDoesNotBlockQueue(t *testing.T) {
 	q := startQueueWithDelay(t, &fakeProvider{}, &fakeEngine{failURL: "/bad/"}, time.Hour)
 	bad := add(t, q, "bad", "tv", 0, nzb.Ref{Provider: "fake", ID: "bad"})
@@ -267,7 +254,6 @@ func TestRetryWaitDoesNotBlockQueue(t *testing.T) {
 	}
 }
 
-// An outage longer than the retry budget doesn't fail the job.
 func TestOutageUsesNoRetries(t *testing.T) {
 	p := &fakeProvider{offline: maxRetries + 3}
 	q := startQueue(t, p, &fakeEngine{})
@@ -277,7 +263,6 @@ func TestOutageUsesNoRetries(t *testing.T) {
 	}
 }
 
-// While a provider is unreachable, none of its jobs are tried.
 func TestOutagePausesProvider(t *testing.T) {
 	p := &fakeProvider{offline: 1}
 	q := startQueueWithDelay(t, p, &fakeEngine{}, time.Hour)
@@ -297,8 +282,6 @@ func TestOutagePausesProvider(t *testing.T) {
 	}
 }
 
-// A stream host that can't be reached is that job's problem: it uses a retry
-// and doesn't hold up the provider's other jobs.
 func TestUnreachableStreamIsNotAnOutage(t *testing.T) {
 	dial := &url.Error{Op: "Get", URL: "http://cdn.invalid/", Err: &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("refused")}}
 	e := &fakeEngine{failURL: "/bad/", err: fmt.Errorf("fetching playlist: %w", dial)}
@@ -348,7 +331,6 @@ func TestUnavailableIsNotRetried(t *testing.T) {
 	}
 }
 
-// Shutdown puts the running job back and starts nothing else.
 func TestShutdownRequeues(t *testing.T) {
 	p := &fakeProvider{}
 	e := &blockingEngine{started: make(chan string, 1)}
@@ -368,8 +350,6 @@ func TestShutdownRequeues(t *testing.T) {
 	}
 }
 
-// Subtitles are saved beside the video as SRT. Subtitles that can't be had
-// are left out, and the video kept.
 func TestSubtitlesSaved(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/napisy.xml" {
@@ -419,8 +399,6 @@ func TestSubtitleName(t *testing.T) {
 	}
 }
 
-// Pausing a running job stops its download without using up an attempt;
-// resumed, it starts again.
 func TestPauseRunningJob(t *testing.T) {
 	p := &fakeProvider{}
 	e := &blockingEngine{started: make(chan string, 2)}
@@ -444,8 +422,6 @@ func TestPauseRunningJob(t *testing.T) {
 	waitJob(t, q, id, func(j Job) bool { return j.Status == StatusDownloading && !j.Paused && j.Attempts == 1 })
 }
 
-// A pause between the worker picking a job and starting its download stops
-// the download too.
 func TestPauseBeforeDownloadStarts(t *testing.T) {
 	for name, pause := range map[string]func(q *Queue, id string) error{
 		"job":   func(q *Queue, id string) error { _, err := q.PauseJobs(id); return err },
@@ -467,8 +443,6 @@ func TestPauseBeforeDownloadStarts(t *testing.T) {
 	}
 }
 
-// Pausing the queue stops the running download and starts nothing until it
-// is resumed, even after a restart.
 func TestPauseQueue(t *testing.T) {
 	dir := t.TempDir()
 	e := &blockingEngine{started: make(chan string, 2)}
@@ -503,11 +477,9 @@ func TestPauseQueue(t *testing.T) {
 	}
 }
 
-// A job paused while running loads paused and queued after a crash, as a
-// running job isn't saved.
 func TestPausedRunningJobSurvivesCrash(t *testing.T) {
 	dir := t.TempDir()
-	// Its download doesn't stop when paused, so the crash comes first.
+	// Ignore cancellation to simulate a crash before the worker handles the pause.
 	e := &orderEngine{started: make(chan struct{}), release: make(chan struct{})}
 	q := newQueue(t, dir, &fakeProvider{}, e)
 	run(t, q)
@@ -525,7 +497,6 @@ func TestPausedRunningJobSurvivesCrash(t *testing.T) {
 	}
 }
 
-// Jobs survive a restart, deleted ones stay deleted, and folders stay reserved.
 func TestJobsPersist(t *testing.T) {
 	dir := t.TempDir()
 	q := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
@@ -558,7 +529,6 @@ func TestJobsPersist(t *testing.T) {
 	}
 }
 
-// A job interrupted by shutdown is queued again after a restart.
 func TestInterruptedJobResumes(t *testing.T) {
 	dir := t.TempDir()
 	e := &blockingEngine{started: make(chan string, 1)}
@@ -579,8 +549,6 @@ func TestInterruptedJobResumes(t *testing.T) {
 	}
 }
 
-// A job running when magnetowid dies loads as Queued, since running isn't
-// saved.
 func TestCrashedJobIsQueued(t *testing.T) {
 	dir := t.TempDir()
 	e := &blockingEngine{started: make(chan string, 1)}
@@ -611,7 +579,6 @@ func TestNewRemovesLeftoverWork(t *testing.T) {
 	}
 }
 
-// Only finished jobs past the retention are forgotten, also on disk.
 func TestPruneOldHistory(t *testing.T) {
 	dir := t.TempDir()
 	q := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
@@ -644,7 +611,6 @@ func TestPruneOldHistory(t *testing.T) {
 	}
 }
 
-// Higher priority jobs start first; equal ones in the order they were added.
 func TestPriorityOrder(t *testing.T) {
 	e := &orderEngine{started: make(chan struct{}), release: make(chan struct{})}
 	q := startQueue(t, &fakeProvider{}, e)
@@ -673,7 +639,6 @@ func TestPriorityOrder(t *testing.T) {
 	}
 }
 
-// Changes that can't be saved are refused and leave the queue as it was.
 func TestUnsavedChangesAreRefused(t *testing.T) {
 	q := newQueue(t, t.TempDir(), &fakeProvider{}, &fakeEngine{})
 	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
@@ -712,7 +677,6 @@ func TestSanitizeName(t *testing.T) {
 	}
 }
 
-// A folder the importer removed is not reused while its job record exists.
 func TestNoReuseOfRecordedStorage(t *testing.T) {
 	q := startQueue(t, &fakeProvider{}, &fakeEngine{})
 	ref := nzb.Ref{Provider: "fake", ID: "1"}

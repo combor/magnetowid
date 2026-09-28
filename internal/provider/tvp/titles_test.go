@@ -33,9 +33,7 @@ var shows = map[string]string{
 	"/shows/7":      hundredsShow(soapNow),
 }
 
-// ranchShow is The Ranch, TVP's Ranczo, with episodes aired around now.
-// Those in the feed's window are S01E13, due in 12 hours, S02E01, and
-// S02E03, which TVP has as paid.
+// Recent fixture episodes: S01E13 (due in 12 hours), S02E01, and paid S02E03.
 func ranchShow(now time.Time) string {
 	aired := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339) }
 	return fmt.Sprintf(`{"tvdbId":5,"title":"The Ranch","episodes":[
@@ -64,8 +62,6 @@ var items = map[string][]string{
 	"haswbstatement:P4835=7":        {"Setki"},
 }
 
-// fakeTitles points p's title lookups at fake Skyhook and Wikidata servers
-// and returns their request count.
 func fakeTitles(t *testing.T, p *Provider) *atomic.Int32 {
 	t.Helper()
 	var requests atomic.Int32
@@ -129,7 +125,6 @@ func checkBotUserAgent(t *testing.T, r *http.Request) {
 	}
 }
 
-// keywordRecorder records the keywords of TVP searches.
 type keywordRecorder struct {
 	next     http.RoundTripper
 	mu       sync.Mutex
@@ -161,13 +156,12 @@ func TestSearchTVDB(t *testing.T) {
 		{"same as Sonarr's", 81970, episode, "Ranczo", []string{"381150"}, []string{"Ranczo"}, true},
 		// Sonarr's title comes last.
 		{"not on TVP", 6, episode, "Nowhere", nil, []string{"Nieznany", "Nowhere"}, false},
-		// The series is watched for its next episodes.
 		{"episode not on TVP", 5, provider.Query{Kind: provider.Episode, Season: 9, Episode: 1}, "The Ranch", nil,
 			[]string{"Rancho", "Ranczo", "The Ranch"}, true},
 		{"unknown series", 404, episode, "", nil, nil, false},
 	}
 	for _, tt := range tests {
-		// TVP's answers are cached, so each case needs its own provider.
+		// Use a fresh provider to avoid cached responses from previous cases.
 		p := newProvider(t)
 		fakeTitles(t, p)
 		rec := &keywordRecorder{next: p.client.Transport}

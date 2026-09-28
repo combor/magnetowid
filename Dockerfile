@@ -1,8 +1,6 @@
 # syntax=docker/dockerfile:1
 
-# golang:1.27.1-trixie, keep in step with the toolchain in go.mod.
-# Compilation runs on the build machine's own platform and cross-compiles with
-# GOARCH.
+# golang:1.27.1-trixie; keep in sync with go.mod.
 FROM --platform=$BUILDPLATFORM golang@sha256:433790e515d27dc6003e847e644cc0af956985cf315c1c58a3b73ee2dd305183 AS build
 
 WORKDIR /src
@@ -21,8 +19,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /magnetowid ./cmd/magnetowid
 
-# alpine:3.24.2. magnetowid shells out to ffmpeg, so the runtime needs a distro
-# rather than distroless; the arm64 image installs it under emulation.
+# alpine:3.24.2 supplies ffmpeg's runtime dependencies.
 FROM alpine@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 LABEL org.opencontainers.image.title="magnetowid" \
@@ -30,7 +27,7 @@ LABEL org.opencontainers.image.title="magnetowid" \
       org.opencontainers.image.source="https://github.com/combor/magnetowid" \
       org.opencontainers.image.licenses="BSD-3-Clause"
 
-# /downloads is owned by the default user so a fresh named volume is writable.
+# Make fresh named volumes writable by the default user.
 RUN apk add --no-cache ffmpeg \
     && install -d -o 65532 -g 65532 /downloads
 
@@ -40,7 +37,6 @@ COPY LICENSE /usr/share/licenses/magnetowid/LICENSE
 ENV MAGNETOWID_DOWNLOAD_DIR=/downloads
 EXPOSE 8484
 
-# Asks magnetowid at MAGNETOWID_LISTEN. Checks every 2 s while it starts.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --start-interval=2s \
     CMD ["/usr/local/bin/magnetowid", "-healthcheck"]
 

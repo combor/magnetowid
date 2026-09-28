@@ -11,7 +11,6 @@ import (
 	"time"
 )
 
-// guideRequests records the times TVP's guide was asked about.
 type guideRequests struct {
 	mu sync.Mutex
 	at []time.Time
@@ -23,8 +22,6 @@ func (g *guideRequests) times() []time.Time {
 	return slices.Clone(g.at)
 }
 
-// serveGuide is a serve function for newProviderWith that answers TVP's
-// guide with programmes(at) when asked about broadcasts around at.
 func serveGuide(t *testing.T, programmes func(at time.Time) []programme) (func(string) (string, bool), *guideRequests) {
 	g := &guideRequests{}
 	return func(key string) (string, bool) {
