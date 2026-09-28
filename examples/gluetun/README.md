@@ -13,9 +13,11 @@ Choose one setup:
 
 For TVP VOD, choose a VPN endpoint in Poland. These examples use your provider's
 WireGuard configuration, saved as `wg0.conf`. Restrict access to that file to
-your account or the service administrator. If you already use a VPN client,
-you can use its system tunnel or application routing instead, including
-magnetowid, FFmpeg, and DNS.
+your account or the service administrator. See
+[Gluetun's WireGuard options](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/wireguard.md)
+for additional VPN settings. If you already use a VPN client, you can use its
+system tunnel or application routing instead, including magnetowid, FFmpeg,
+and DNS.
 
 ## HTTP proxy
 
@@ -146,8 +148,7 @@ done
 
 Edit [compose.yaml](compose.yaml) for your VPN.
 It uses a WireGuard configuration supplied by your VPN provider. Choose the
-Gluetun image tag or digest you want to run, and set
-`WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL` if your provider requires it.
+Gluetun image tag or digest you want to run.
 Keep the firewall enabled and the published port bound to loopback.
 
 The [systemd service](magnetowid-gluetun.service),

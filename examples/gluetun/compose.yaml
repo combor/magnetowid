@@ -14,8 +14,6 @@ services:
       VPN_SERVICE_PROVIDER: custom
       VPN_TYPE: wireguard
       FIREWALL_INPUT_PORTS: "8484"
-      # Set this if required by your VPN configuration.
-      # WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL: 25s
     volumes:
       - ./wg0.conf:/gluetun/wireguard/wg0.conf:ro
       - state:/gluetun
