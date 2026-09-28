@@ -10,7 +10,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -88,7 +87,7 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 	if err != nil || !ok {
 		return nil, err
 	}
-	return p.serialEpisodes(ctx, serial, q)
+	return p.serialEpisodes(ctx, serial, q, nil)
 }
 
 // findSerial returns the free TVP serial with the title.
@@ -102,11 +101,19 @@ func (p *Provider) findSerial(ctx context.Context, title string) (product, bool,
 }
 
 // serialEpisodes maps the *arr's season/episode onto TVP's episode numbers,
-// which often run across seasons (Ranczo's season 2 is 14-26).
-func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provider.Query) ([]provider.Item, error) {
+// which often run across seasons (Ranczo's season 2 is 14-26). tv is the
+// series' TVDB data, or nil if the search didn't come with a TVDB ID.
+func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provider.Query, tv *series) ([]provider.Item, error) {
 	seasons, err := p.seasons(ctx, serial.ID)
 	if err != nil {
 		return nil, err
+	}
+	bs := blocks(seasons)
+	if len(bs) > 0 && tv != nil {
+		items, numbered, err := p.byNumber(ctx, serial, bs, q, tv)
+		if err != nil || numbered {
+			return items, err
+		}
 	}
 	var episodes []product
 	if season, ok := findSeason(seasons, q.Season); ok {
@@ -115,8 +122,9 @@ func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provide
 		}
 		// A block's position says nothing about TVDB's seasons: M jak
 		// miłość's block 20 starts at 1901, but TVDB's S20E1 is 1452. Only
-		// season 1 and a block starting at 1 both count from the first episode.
-		if !hasBlocks(seasons) || q.Season == 1 {
+		// season 1 and a block starting at 1 both count from the first
+		// episode; byNumber has already used that if it had TVDB's episodes.
+		if len(bs) == 0 || (q.Season == 1 && tv == nil) {
 			items, err := p.bySeason(ctx, serial, seasons, q, episodes)
 			if err != nil || len(items) > 0 || q.Episode == 0 {
 				return items, err
@@ -282,21 +290,6 @@ func (p *Provider) seasonStart(ctx context.Context, serialID int64, seasons []pr
 		return first, true, nil
 	}
 	return 0, false, nil
-}
-
-// blockTitle is the title of a season that TVP uses as a block of episode
-// numbers, e.g. "1–100", "801-900" or, for the latest, "1901–".
-var blockTitle = regexp.MustCompile(`^\s*\d+\s*[–-]\s*\d*\s*$`)
-
-// hasBlocks reports whether TVP keeps the serial's episodes in blocks of
-// numbers rather than seasons, as it does for long soaps.
-func hasBlocks(seasons []product) bool {
-	for _, s := range seasons {
-		if blockTitle.MatchString(s.Title) {
-			return true
-		}
-	}
-	return false
 }
 
 func findSeason(seasons []product, number int) (product, bool) {

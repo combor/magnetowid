@@ -191,7 +191,8 @@ Include the steps to reproduce and any relevant error message, with API keys rem
     found only if that title matches the site's, unless the site can also be
     searched by TVDB ID. The notes for each site say whether it can.
 - **Episode numbers:** a series whose seasons or episode numbers on the site
-  differ from TVDB's isn't found, by search or by RSS.
+  differ from TVDB's isn't found, by search or by RSS, unless the site's notes
+  say how it is. TVP's long soaps are found this way.
 - **What can't be downloaded:** DRM-protected and paid content, and titles not available where vodarr runs. vodarr leaves them out of search results, and logs how many it left out with the site's reason for the first. A job can still fail if a title stops being available between the search and the download. Getting network access to region-restricted titles is up to the operator.
 - **Release details:**
   - A release's name gives the resolution and codecs of the best stream the site offers, which is the one vodarr downloads. vodarr reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.

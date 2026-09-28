@@ -30,6 +30,7 @@ var shows = map[string]string{
 	"/shows/4":      `{"tvdbId":4,"title":""}`,
 	"/shows/5":      ranchShow(time.Now()),
 	"/shows/6":      `{"tvdbId":6,"title":"Nowhere"}`,
+	"/shows/7":      hundredsShow(soapNow),
 }
 
 // ranchShow is The Ranch, TVP's Ranczo, with episodes aired around now.
@@ -60,6 +61,7 @@ var items = map[string][]string{
 	"haswbstatement:P4835=2":        {"Pierwszy", "Drugi"},
 	"haswbstatement:P4835=5":        {"Rancho", "RANCHO", "Ranczo"},
 	"haswbstatement:P4835=6":        {"Nieznany"},
+	"haswbstatement:P4835=7":        {"Setki"},
 }
 
 // fakeTitles points p's title lookups at fake Skyhook and Wikidata servers

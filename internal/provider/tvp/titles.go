@@ -20,7 +20,8 @@ import (
 // Sonarr's series titles are often English ("Days of Honor"), but TVP only
 // knows Polish ones ("Czas honoru"). For Sonarr's search by TVDB ID, Wikidata
 // gives the Polish title and Skyhook, where Sonarr gets its titles, the title
-// the releases need. Skyhook also gives the air dates the feed goes by.
+// the releases need. Skyhook also gives the air dates the feed goes by, and
+// the absolute numbers long soaps are found by.
 
 const (
 	skyhookURL  = "https://skyhook.sonarr.tv/v1/tvdb/shows/en"
@@ -88,7 +89,7 @@ func (p *Provider) searchTitles(ctx context.Context, s series, q provider.Query)
 			continue
 		}
 		m.serialFound = true
-		items, err := p.serialEpisodes(ctx, serial, q)
+		items, err := p.serialEpisodes(ctx, serial, q, &s)
 		if err != nil {
 			return titleMatch{}, err
 		}
@@ -100,17 +101,21 @@ func (p *Provider) searchTitles(ctx context.Context, s series, q provider.Query)
 	return m, nil
 }
 
-// series holds a series' titles and aired episodes.
+// series holds a series' titles and episodes.
 type series struct {
 	title    string   // Sonarr's
 	polish   []string // Wikidata's, possibly none
-	episodes []airedEpisode
+	episodes []tvdbEpisode
 }
 
-// airedEpisode is an episode with a TVDB air date, in TVDB's numbering.
-type airedEpisode struct {
+// tvdbEpisode is an episode in TVDB's numbering, without specials.
+type tvdbEpisode struct {
 	season, episode int
-	aired           time.Time
+	aired           time.Time // zero if not yet scheduled
+	// number counts from the series' first episode, as TVDB's absolute
+	// number and a title that is only the number give it; 0 if neither
+	// does, conflicting if they differ.
+	number int
 }
 
 // titleLookup finds series titles by TVDB ID and caches them. It is safe
@@ -174,9 +179,11 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 		Title    string `json:"title"`
 		ImdbID   string `json:"imdbId"`
 		Episodes []struct {
-			SeasonNumber  int    `json:"seasonNumber"`
-			EpisodeNumber int    `json:"episodeNumber"`
-			AirDateUtc    string `json:"airDateUtc"`
+			SeasonNumber          int    `json:"seasonNumber"`
+			EpisodeNumber         int    `json:"episodeNumber"`
+			AbsoluteEpisodeNumber int    `json:"absoluteEpisodeNumber"`
+			Title                 string `json:"title"`
+			AirDateUtc            string `json:"airDateUtc"`
 		} `json:"episodes"`
 	}
 	if err := l.get(ctx, l.skyhookURL+"/"+strconv.Itoa(tvdbID), &show); err != nil {
@@ -187,11 +194,16 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 	}
 	s := series{title: show.Title}
 	for _, e := range show.Episodes {
-		aired, err := time.Parse(time.RFC3339, e.AirDateUtc)
-		if e.SeasonNumber <= 0 || e.EpisodeNumber <= 0 || err != nil {
-			continue // specials, and episodes not yet scheduled
+		if e.SeasonNumber <= 0 || e.EpisodeNumber <= 0 {
+			continue // specials
 		}
-		s.episodes = append(s.episodes, airedEpisode{season: e.SeasonNumber, episode: e.EpisodeNumber, aired: aired})
+		aired, _ := time.Parse(time.RFC3339, e.AirDateUtc)
+		s.episodes = append(s.episodes, tvdbEpisode{
+			season:  e.SeasonNumber,
+			episode: e.EpisodeNumber,
+			aired:   aired,
+			number:  agreed(max(e.AbsoluteEpisodeNumber, 0), titleNumber(e.Title)),
+		})
 	}
 
 	// The TVDB ID finds the Wikidata item; the IMDb ID covers items without it.
