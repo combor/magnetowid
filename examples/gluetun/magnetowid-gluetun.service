@@ -1,0 +1,23 @@
+[Unit]
+Description=Gluetun VPN network for magnetowid
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/etc/magnetowid-gluetun
+RuntimeDirectory=magnetowid-gluetun
+RuntimeDirectoryMode=0755
+ExecStart=/usr/bin/docker compose -p magnetowid-vpn up -d --wait --wait-timeout 120
+ExecStartPost=/etc/magnetowid-gluetun/netns.sh
+ExecStop=/usr/bin/docker compose -p magnetowid-vpn stop
+Restart=on-failure
+RestartSec=10
+TimeoutStartSec=180
+TimeoutStopSec=60
+
+[Install]
+WantedBy=multi-user.target
