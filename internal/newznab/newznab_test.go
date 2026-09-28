@@ -23,7 +23,6 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// streams serves the master playlists fake items resolve to.
 var streams *httptest.Server
 
 func TestMain(m *testing.M) {
@@ -73,9 +72,6 @@ func (f *fakeProvider) Search(_ context.Context, q provider.Query) ([]provider.I
 	return f.items, nil
 }
 
-// Resolve gives a 1080p stream, or by ID prefix: "720" a 720p one, "pl" a
-// 1080p one with Polish audio, "drm" none, "down" one whose playlist can't
-// be fetched, and "stall" one whose playlist never comes.
 func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, error) {
 	f.resolves.Add(1)
 	switch {
@@ -93,7 +89,6 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	return provider.Stream{URL: streams.URL + "/1080.m3u8"}, nil
 }
 
-// fakeTVDBProvider also searches by TVDB ID, returning title and its items.
 type fakeTVDBProvider struct {
 	fakeProvider
 	gotTVDB int
@@ -106,7 +101,6 @@ func (f *fakeTVDBProvider) SearchTVDB(_ context.Context, tvdbID int, q provider.
 	return f.title, f.items, f.err
 }
 
-// fakeRecentProvider also lists new releases for RSS sync.
 type fakeRecentProvider struct {
 	fakeProvider
 	releases []provider.Release
@@ -120,8 +114,6 @@ func (f *fakeRecentProvider) Recent(_ context.Context, kind provider.Kind) ([]pr
 	return f.releases, f.err
 }
 
-// Resolve is fakeProvider's, with the IDs in fail resolved as if they had
-// their prefix.
 func (f *fakeRecentProvider) Resolve(ctx context.Context, id string) (provider.Stream, error) {
 	if prefix := f.fail[id]; prefix != "" {
 		return f.fakeProvider.Resolve(ctx, prefix+"-"+id)
@@ -134,7 +126,6 @@ func newServer(t *testing.T, p provider.Provider) *httptest.Server {
 	return newServerWith(t, p, nil)
 }
 
-// newServerWith is newServer with the handler changed by set, if not nil.
 func newServerWith(t *testing.T, p provider.Provider, set func(*Handler)) *httptest.Server {
 	t.Helper()
 	h := &Handler{
@@ -164,7 +155,6 @@ func get(t *testing.T, srv *httptest.Server, path string, params url.Values) str
 	return string(body)
 }
 
-// feedItem holds the fields Sonarr/Radarr read.
 type feedItem struct {
 	Title     string `xml:"title"`
 	GUID      string `xml:"guid"`
@@ -279,7 +269,7 @@ func TestEpisodeSearch(t *testing.T) {
 	if it.GUID != "fake:381150" {
 		t.Errorf("guid = %q", it.GUID)
 	}
-	// The size is the duration at the stream's average bandwidth, 4.8 Mbit/s.
+	// 1800000000 bytes = duration × 4.8 Mbit/s average bandwidth.
 	if attrValue(it, "category") != "5040" || attrValue(it, "size") != "1800000000" || it.Enclosure.Length != 1800000000 {
 		t.Errorf("attrs = %+v, enclosure = %+v", it.Attrs, it.Enclosure)
 	}
@@ -307,8 +297,7 @@ func TestEpisodeSearchNeedsSeason(t *testing.T) {
 	}
 }
 
-// Radarr searches with t=search and movie categories; the release keeps
-// Radarr's year, not the site's.
+// Radarr uses t=search with movie categories; preserve its requested year.
 func TestMovieSearchViaSearch(t *testing.T) {
 	fp := &fakeProvider{items: []provider.Item{{ID: "296079", Kind: provider.Movie, Year: 1970}}}
 	srv := newServer(t, fp)
@@ -366,18 +355,15 @@ func TestReleaseTitle(t *testing.T) {
 		{provider.Query{Title: "Ranczo"}, provider.Item{Kind: provider.Episode, Season: 2, Episode: 1},
 			probe.Info{Width: 1280, Height: 720, Codecs: "hvc1.1.6.L93.B0,ec-3"},
 			"Ranczo.S02E01.720p.WEB-DL.DDP.H.265-TVP"},
-		// Codecs the playlist doesn't name are left out.
 		{provider.Query{Title: "Ranczo"}, provider.Item{Kind: provider.Episode, Season: 2, Episode: 1},
 			probe.Info{Width: 1024, Height: 576},
 			"Ranczo.S02E01.576p.WEB-DL-TVP"},
-		// The audio language follows the episode or year, as in scene names.
 		{provider.Query{Title: "L for Love"}, provider.Item{Kind: provider.Episode, Season: 27, Episode: 6},
 			probe.Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Language: "pl"},
 			"L.for.Love.S27E06.POLISH.1080p.WEB-DL.AAC.H.264-TVP"},
 		{provider.Query{Title: "Cube", Year: 1998}, provider.Item{Kind: provider.Movie, Year: 1997},
 			probe.Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Language: "pl"},
 			"Cube.1998.POLISH.1080p.WEB-DL.AAC.H.264-TVP"},
-		// A language Sonarr and Radarr can't read by name is left out.
 		{provider.Query{Title: "Cube", Year: 1998}, provider.Item{Kind: provider.Movie, Year: 1997},
 			probe.Info{Width: 1920, Height: 1080, Codecs: "avc1.640029,mp4a.40.2", Language: "und"},
 			"Cube.1998.1080p.WEB-DL.AAC.H.264-TVP"},
@@ -389,8 +375,6 @@ func TestReleaseTitle(t *testing.T) {
 	}
 }
 
-// Releases are named with their stream's audio language and quality. Items
-// that can't be downloaded, or whose quality can't be read, are left out.
 func TestSearchNamesStreamQuality(t *testing.T) {
 	fp := &fakeProvider{items: []provider.Item{
 		{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1},
@@ -418,9 +402,7 @@ func TestSearchNamesStreamQuality(t *testing.T) {
 	}
 }
 
-// A stalled stream is left out once probing runs out of time, so the search
-// still answers before Sonarr gives up on it. The time the provider's search
-// took counts too.
+// The response deadline includes time spent searching the provider.
 func TestStalledStreamIsLeftOut(t *testing.T) {
 	for name, tt := range map[string]struct {
 		searchDelay, budget, answer, max time.Duration
@@ -449,8 +431,7 @@ func TestStalledStreamIsLeftOut(t *testing.T) {
 	}
 }
 
-// A stalled stream times out in time for another item to fill its place, so
-// the page stays full and Sonarr asks for the next one.
+// Full pages are required for Sonarr to request the next page.
 func TestStalledStreamIsReplaced(t *testing.T) {
 	fp := &fakeProvider{}
 	for i := 1; i <= 105; i++ {
@@ -476,8 +457,6 @@ func TestStalledStreamIsReplaced(t *testing.T) {
 	}
 }
 
-// An offset past the provider's results gives an empty page without
-// probing anything.
 func TestOffsetPastResults(t *testing.T) {
 	fp := &fakeProvider{items: []provider.Item{{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1}}}
 	items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", url.Values{
@@ -488,8 +467,6 @@ func TestOffsetPastResults(t *testing.T) {
 	}
 }
 
-// Items are left out before paging, so a full page stays full and Sonarr
-// asks for the next one. Only as many are probed as the page needs.
 func TestPagingAfterLeavingOut(t *testing.T) {
 	fp := &fakeProvider{}
 	for i := 1; i <= 150; i++ {
@@ -546,7 +523,6 @@ func TestSplitYear(t *testing.T) {
 	}
 }
 
-// Sonarr asks for the next offset whenever a page is full.
 func TestSearchPaging(t *testing.T) {
 	fp := &fakeProvider{}
 	for i := 1; i <= 150; i++ {
@@ -574,7 +550,6 @@ func TestSearchPaging(t *testing.T) {
 	}
 }
 
-// Behind a TLS-terminating reverse proxy, links must use the external URL.
 func TestLinksBehindProxy(t *testing.T) {
 	fp := &fakeProvider{items: []provider.Item{{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1}}}
 	srv := newServer(t, fp)
@@ -595,8 +570,6 @@ func TestLinksBehindProxy(t *testing.T) {
 	}
 }
 
-// Sonarr's first search for a series has only its TVDB ID. Releases are
-// named with the title the provider returns.
 func TestSearchByTVDBID(t *testing.T) {
 	fp := &fakeTVDBProvider{title: "Days of Honor"}
 	fp.items = []provider.Item{
@@ -616,8 +589,7 @@ func TestSearchByTVDBID(t *testing.T) {
 	}
 }
 
-// When a search by TVDB ID finds nothing, Sonarr searches by title. So it
-// must never return the placeholder, which would count as a result.
+// Returning a placeholder would suppress Sonarr's title-search fallback.
 func TestSearchByTVDBIDFindsNothing(t *testing.T) {
 	item := []provider.Item{{ID: "1", Kind: provider.Episode, Season: 1, Episode: 1}}
 	for name, p := range map[string]provider.Provider{
@@ -644,7 +616,6 @@ func TestSearchByTVDBIDError(t *testing.T) {
 	}
 }
 
-// rssSync is Sonarr's RSS sync request, which has no title or ID.
 func rssSync(offset, limit string) url.Values {
 	v := url.Values{"t": {"tvsearch"}, "cat": {"5000,5040"}, "extended": {"1"}, "apikey": {"secret"}}
 	if offset != "" {
@@ -654,8 +625,6 @@ func rssSync(offset, limit string) url.Values {
 	return v
 }
 
-// RSS sync gets the provider's new releases, newest first, named with the
-// *arr's title and the stream's quality, then the placeholder.
 func TestRSSListsRecentReleases(t *testing.T) {
 	day := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
 	rel := func(id string, ep int, published time.Time) provider.Release {
@@ -702,8 +671,7 @@ func TestRSSListsRecentReleases(t *testing.T) {
 	}
 }
 
-// The indexer test fails on an empty feed, so the placeholder stands in
-// when nothing can be offered.
+// An empty feed fails the indexer connection test.
 func TestRSSPlaceholder(t *testing.T) {
 	drm := []provider.Release{{Title: "Days of Honor", Item: provider.Item{ID: "drm-1", Kind: provider.Episode, Season: 1, Episode: 1}}}
 	for name, fp := range map[string]*fakeRecentProvider{
@@ -716,16 +684,14 @@ func TestRSSPlaceholder(t *testing.T) {
 			t.Errorf("%s: items = %+v", name, items)
 			continue
 		}
-		// Older than any release, so Sonarr reads on to the ones it hasn't seen.
+		// The placeholder must not advance Sonarr's RSS cutoff.
 		if published, err := time.Parse(time.RFC1123Z, items[0].PubDate); err != nil || published.After(time.Now().AddDate(-1, 0, 0)) {
 			t.Errorf("%s: placeholder published %q, want long ago", name, items[0].PubDate)
 		}
 	}
 }
 
-// The placeholder ends the last page Sonarr reads, which is the first that
-// isn't full. When the feed turns from only the placeholder to releases,
-// Sonarr finds it again, so it doesn't warn that it missed releases between.
+// Retain the placeholder when real releases appear to prevent Sonarr's RSS-gap warning.
 func TestRSSPlaceholderEndsFeed(t *testing.T) {
 	srv := newServer(t, &fakeRecentProvider{releases: manyReleases(150)})
 	if guids := allGUIDs(t, srv, "0"); len(guids) != 100 || slices.Contains(guids, "fake:placeholder") {
@@ -780,8 +746,6 @@ func TestRSSKind(t *testing.T) {
 	}
 }
 
-// A film in Radarr's feed is named with the year the provider gives, which is
-// Radarr's own.
 func TestRSSNamesFilms(t *testing.T) {
 	fp := &fakeRecentProvider{releases: []provider.Release{
 		{Title: "Kler", Item: provider.Item{ID: "1", Kind: provider.Movie, Title: "Kler", Year: 2018}},
@@ -793,7 +757,6 @@ func TestRSSNamesFilms(t *testing.T) {
 	}
 }
 
-// manyReleases returns n releases published an hour ago, r000 onwards.
 func manyReleases(n int) []provider.Release {
 	published := time.Now().Add(-time.Hour).Truncate(time.Second)
 	var rs []provider.Release
@@ -804,7 +767,6 @@ func manyReleases(n int) []provider.Release {
 	return rs
 }
 
-// releaseGUIDs returns the GUIDs of releases from, up to, the one numbered to.
 func releaseGUIDs(from, to int) []string {
 	var guids []string
 	for i := from; i <= to; i++ {
@@ -813,14 +775,11 @@ func releaseGUIDs(from, to int) []string {
 	return guids
 }
 
-// rssPage returns the GUIDs of the releases on the RSS page at offset,
-// leaving out the placeholder.
 func rssPage(t *testing.T, srv *httptest.Server, offset string) []string {
 	t.Helper()
 	return slices.DeleteFunc(allGUIDs(t, srv, offset), func(guid string) bool { return guid == "fake:placeholder" })
 }
 
-// allGUIDs returns the GUIDs of every item on the RSS page at offset.
 func allGUIDs(t *testing.T, srv *httptest.Server, offset string) []string {
 	t.Helper()
 	var guids []string
@@ -830,16 +789,13 @@ func allGUIDs(t *testing.T, srv *httptest.Server, offset string) []string {
 	return guids
 }
 
-// A release left out because its stream couldn't be read comes first once it
-// can be, even if over 100 releases share its date: Sonarr reads further
-// pages only until one holds the newest release it saw before.
+// Deferred releases must precede Sonarr's cutoff, even with more than one page of tied dates.
 func TestRSSOffersReleaseReadLater(t *testing.T) {
 	fp := &fakeRecentProvider{releases: manyReleases(120), fail: map[string]string{"r105": "down"}}
 	day := fp.releases[0].Published
 	var h *Handler
 	srv := newServerWith(t, fp, func(set *Handler) { h = set })
-	// As after a restart: every release is newer than any Sonarr saw, so it
-	// reads every page.
+	// Simulate startup: all releases postdate Sonarr's cutoff.
 	if guids := append(rssPage(t, srv, "0"), rssPage(t, srv, "100")...); len(guids) != 119 || slices.Contains(guids, "fake:r105") {
 		t.Fatalf("first sync: %d releases, r105 among them: %v", len(guids), slices.Contains(guids, "fake:r105"))
 	}
@@ -852,14 +808,12 @@ func TestRSSOffersReleaseReadLater(t *testing.T) {
 	if published, err := time.Parse(time.RFC1123Z, items[0].PubDate); err != nil || !published.After(day) {
 		t.Errorf("r105 published %q, want after the others' %s", items[0].PubDate, day.Format(time.RFC1123Z))
 	}
-	// It keeps that date.
 	if again := parseFeed(t, get(t, srv, "/fake/api", rssSync("0", "100"))); again[0].GUID != "fake:r105" || again[0].PubDate != items[0].PubDate {
 		t.Errorf("then: %s published %s, want fake:r105 published %s", again[0].GUID, again[0].PubDate, items[0].PubDate)
 	}
 }
 
-// Releases not probed in time are held too: the page came short, so Sonarr
-// didn't ask for the rest.
+// A short page stops Sonarr from requesting the unprobed releases.
 func TestRSSHoldsReleasesNotProbedInTime(t *testing.T) {
 	fp := &fakeRecentProvider{releases: manyReleases(200), fail: map[string]string{}}
 	for i := 1; i < 100; i++ {
@@ -882,8 +836,6 @@ func TestRSSHoldsReleasesNotProbedInTime(t *testing.T) {
 	}
 }
 
-// Held releases keep their places while Sonarr pages through a sync, so
-// none is skipped.
 func TestRSSPagesStayPutWhileHeldReleasesReturn(t *testing.T) {
 	fp := &fakeRecentProvider{releases: manyReleases(250), fail: map[string]string{}}
 	for i := range 150 {
@@ -906,9 +858,6 @@ func TestRSSPagesStayPutWhileHeldReleasesReturn(t *testing.T) {
 	}
 }
 
-// Releases that keep failing slowly don't use up every sync's probing time:
-// held releases not tried for longest are probed first, so the others get
-// their turn.
 func TestRSSRetriesFailuresLast(t *testing.T) {
 	fp := &fakeRecentProvider{releases: manyReleases(30), fail: map[string]string{}}
 	for i := range 12 {
@@ -931,8 +880,6 @@ func TestRSSRetriesFailuresLast(t *testing.T) {
 	}
 }
 
-// A sync's later pages come from the releases listed when it began, so a
-// release dropped meanwhile doesn't shift another off every page.
 func TestRSSPagesComeFromOneList(t *testing.T) {
 	fp := &fakeRecentProvider{releases: manyReleases(150)}
 	srv := newServer(t, fp)

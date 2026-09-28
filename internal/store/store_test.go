@@ -31,7 +31,6 @@ func TestNewDatabaseGetsVersion(t *testing.T) {
 	}
 }
 
-// A queue saved before versioning opens unchanged.
 func TestUnversionedDatabaseOpens(t *testing.T) {
 	dir := t.TempDir()
 	old, err := bolt.Open(filepath.Join(dir, File), 0o666, nil)
@@ -89,7 +88,6 @@ func TestNewerVersionIsRefused(t *testing.T) {
 	}
 }
 
-// A second magnetowid on the same folder fails instead of waiting for the lock.
 func TestDatabaseInUse(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir)

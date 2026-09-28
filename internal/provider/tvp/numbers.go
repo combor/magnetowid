@@ -11,30 +11,20 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// TVP numbers the episodes of long soaps from the series' start and keeps
-// them in blocks of 100. TVDB's seasons follow the broadcast years, so its
-// season and episode don't give that number. TVDB's absolute numbers, its
-// titles that are only the number, and TVP's guide do, but TVDB's are patchy
-// and sometimes wrong, so a number is used only if it holds up.
+// TVP groups long soaps into blocks of 100 episodes; TVDB groups them by year.
+// Validate absolute numbers, numeric titles, and guide matches before using them.
 
-// maxYearsApart is how far TVP's year for an episode may be from TVDB's air
-// date. TVP's years are sometimes a year or two off; a wrong number from TVDB
-// is usually many years off (M jak miłość's S7, from 2007, has TVDB absolute
-// numbers of 2020 episodes).
+// Allow a two-year discrepancy; larger gaps suggest a wrong episode number.
 const maxYearsApart = 2
 
-// block is a season that TVP uses as a block of episode numbers.
 type block struct {
 	season      product
 	first, last int // last is 0 for the latest, open block
 }
 
-// blockTitle is the title of a block: "1–100", "801-900" or, for the latest,
-// "1901–".
+// TVP block titles: "1–100", "801-900", or the open-ended "1901–".
 var blockTitle = regexp.MustCompile(`^\s*(\d+)\s*[–-]\s*(\d*)\s*$`)
 
-// blocks returns the seasons TVP uses as blocks of episode numbers, as it
-// does for long soaps.
 func blocks(seasons []product) []block {
 	var bs []block
 	for _, s := range seasons {
@@ -52,11 +42,9 @@ func blocks(seasons []product) []block {
 	return bs
 }
 
-// numberTitle is a TVDB episode title that is only its number: "1945",
-// "Odcinek 1378", "Episode 75", "Odcinek 846 (12.09.2011)".
+// TVDB numeric titles include "1945", "Episode 75", and "Odcinek 846 (12.09.2011)".
 var numberTitle = regexp.MustCompile(`(?i)^\s*(?:(?:odcinek|episode|odc\.)\s*)?(\d+)\s*(?:\(.*\))?\s*$`)
 
-// titleNumber returns the number a TVDB episode title gives, or 0.
 func titleNumber(title string) int {
 	m := numberTitle.FindStringSubmatch(title)
 	if m == nil {
@@ -66,11 +54,10 @@ func titleNumber(title string) int {
 	return n
 }
 
-// conflicting is the number of an episode whose sources give different
-// numbers. No other source overrides it.
+// Conflicting sources invalidate a number; later sources cannot override this.
 const conflicting = -1
 
-// agreed returns the number a and b both give, where 0 is unknown.
+// Zero means unknown; conflicting known values invalidate the number.
 func agreed(a, b int) int {
 	switch {
 	case a == 0:
@@ -81,12 +68,9 @@ func agreed(a, b int) int {
 	return conflicting
 }
 
-// episodeKey is a TVDB season and episode.
 type episodeKey struct{ season, episode int }
 
-// episodeNumbers returns TVP's numbers for the series' episodes, where they
-// can be told. It asks TVP's guide about the episodes it still lists only if
-// the season has some, so a search for an older season doesn't depend on it.
+// Consult the guide only for seasons with recent episodes, keeping old-season searches independent.
 func (p *Provider) episodeNumbers(ctx context.Context, s *series, serialTitle string, season int, now time.Time) (map[episodeKey]int, error) {
 	inGuide := func(e tvdbEpisode) bool {
 		return !e.aired.Before(now.Add(-guideWindow)) && !e.aired.After(now.Add(airDateSlack))
@@ -113,12 +97,9 @@ func (p *Provider) episodeNumbers(ctx context.Context, s *series, serialTitle st
 	return checkNumbers(s.episodes, numbers), nil
 }
 
-// checkNumbers keeps the episodes' numbers that no other episode has and
-// that an adjacent episode of the same season agrees with: its number is at
-// the same offset from its episode number, as in a run of episodes numbered
-// in order. That drops TVDB's stray absolute numbers and typos (Barwy
-// szczęścia's "Odcinek 28981"), and a guide number found through a wrong
-// air date. numbers[i] is episodes[i]'s, 0 or less if unknown.
+// Accept only unique numbers whose offset agrees with an adjacent episode in
+// the same season. This rejects isolated typos and incorrect guide matches.
+// numbers[i] belongs to episodes[i]; nonpositive values are unknown or conflicting.
 func checkNumbers(episodes []tvdbEpisode, numbers []int) map[episodeKey]int {
 	claims := make(map[int]int)
 	for _, n := range numbers {
@@ -152,9 +133,7 @@ func checkNumbers(episodes []tvdbEpisode, numbers []int) map[episodeKey]int {
 	return checked
 }
 
-// byNumber finds the wanted episodes of a serial kept in blocks by TVP's
-// numbers for them. numbered is false if none of them has a number, so other
-// ways can be tried.
+// numbered=false allows fallbacks when none of the requested episodes has a validated number.
 func (p *Provider) byNumber(ctx context.Context, serial product, bs []block, q provider.Query, tv *series) (items []provider.Item, numbered bool, err error) {
 	numbers, err := p.episodeNumbers(ctx, tv, serial.Title, q.Season, time.Now())
 	if err != nil {
@@ -181,7 +160,7 @@ func (p *Provider) byNumber(ctx context.Context, serial product, bs []block, q p
 	return items, numbered, nil
 }
 
-// numbered returns the serial's only episode with TVP's number n.
+// Reject duplicate matches for the same absolute number.
 func (p *Provider) numbered(ctx context.Context, serialID int64, bs []block, n int) (product, bool, error) {
 	var match []product
 	for _, b := range bs {

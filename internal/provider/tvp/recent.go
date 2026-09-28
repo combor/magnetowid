@@ -11,31 +11,22 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// The feeds offer new episodes of the watched series to Sonarr's RSS sync,
-// and new films that Radarr has searched for to Radarr's.
-//
-// TVP doesn't list new episodes, and mapping a TVP episode back to TVDB's
-// numbering can name it as another episode, so the series feed runs the
-// search Sonarr would for each episode that TVDB says has just aired. TVP
-// does list its newest products, films among them, so the film feed matches
-// those against the films Radarr searched for.
+// TVP has no new-episode feed. Search recently aired TVDB episodes using Sonarr's
+// numbering; reversing TVP numbering can select the wrong episode. For films,
+// match TVP's newest products against Radarr's watch list.
 
 const (
 	recentWindow = 14 * 24 * time.Hour
-	// airDateSlack lets in episodes whose TVDB air time is a little late.
-	// TVP hides episodes until they are free, at broadcast.
+	// Allow late TVDB air times; TVP hides episodes until broadcast.
 	airDateSlack = 24 * time.Hour
 	feedTTL      = 10 * time.Minute
 	feedTimeout  = 5 * time.Minute
-	// newestProducts is how many of TVP's newest products the film feed
-	// reads: about two and a half weeks' worth, two thirds of them films.
+	// About two and a half weeks of products, roughly two thirds films.
 	newestProducts = 100
-	// filmsKey holds the film feed's releases, which one listing finds.
-	filmsKey = 0
+	filmsKey       = 0
 )
 
-// feed holds the releases found by the last rebuild. RSS sync can't wait
-// for TVP, so rebuilds run in the background.
+// Rebuild in the background because RSS requests cannot wait for TVP.
 type feed struct {
 	rebuild func(context.Context) // rebuildSeries or rebuildFilms; replaced in tests
 
@@ -43,8 +34,8 @@ type feed struct {
 	found     map[int][]provider.Release // by TVDB ID, or under filmsKey
 	firstSeen map[string]time.Time       // by TVP ID
 	tried     map[int]time.Time          // when a rebuild last began on each series
-	built     time.Time                  // when the last rebuild finished
-	stale     bool                       // a series was added since then
+	built     time.Time
+	stale     bool // series added since the last rebuild
 	building  bool
 }
 
@@ -54,9 +45,8 @@ func (f *feed) markStale() {
 	f.mu.Unlock()
 }
 
-// Recent returns the new releases found by the last rebuild at once, and
-// starts a rebuild if that one is out of date. The first RSS sync after a
-// start therefore gets none.
+// Recent returns cached releases and starts stale rebuilds asynchronously.
+// The first sync after startup is empty.
 func (p *Provider) Recent(_ context.Context, kind provider.Kind) ([]provider.Release, error) {
 	switch kind {
 	case provider.Episode:
@@ -88,20 +78,13 @@ func (f *feed) recent() []provider.Release {
 	return out
 }
 
-// publish replaces the feed's releases with those found, and keeps the ones
-// found before under the keys that failed. tried are the series the rebuild
-// got to. It returns how many releases the feed has.
-//
-// A release is dated when a rebuild first found it, not by TVP: TVP lists
-// premieres days early as paid, and dates them then. Sonarr's RSS sync reads
-// further pages only until one holds a release older than the newest it saw
-// last time, so a release dated by TVP could sort onto a page it never reads
-// once it turns free.
+// Keep previous releases for failed keys; tried lists the series reached.
+// Date new releases when discovered: TVP dates paid premieres early, which
+// would put them behind Sonarr's RSS cutoff when they become free.
 func (f *feed) publish(found map[int][]provider.Release, tried, failed []int) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	// The time this rebuild finished is after anything offered while it ran,
-	// so its new releases are newer than any Sonarr has seen.
+	// New releases must postdate anything served during this rebuild.
 	done := time.Now()
 	if f.tried == nil {
 		f.tried = make(map[int]time.Time)
@@ -132,15 +115,12 @@ func (f *feed) publish(found map[int][]provider.Release, tried, failed []int) in
 	return len(firstSeen)
 }
 
-// rebuildSeries looks for new episodes of every watched series. A series it
-// can't look through keeps the releases found before.
 func (p *Provider) rebuildSeries(ctx context.Context) {
 	f := &p.seriesFeed
 	f.mu.Lock()
 	f.stale = false // before reading the list, so no series added later is missed
 	ids := p.watchedSeries.ids()
-	// Series not tried for longest go first, so a rebuild that runs out of
-	// time doesn't leave out the same ones every time.
+	// Try the least recently checked series first to avoid starvation on timeouts.
 	slices.SortStableFunc(ids, func(a, b int) int { return f.tried[a].Compare(f.tried[b]) })
 	f.mu.Unlock()
 
@@ -174,8 +154,6 @@ func (p *Provider) rebuildSeries(ctx context.Context) {
 	p.log.Debug("rebuilt TVP series feed", "series", len(ids), "releases", n, "took", time.Since(now).Round(time.Second))
 }
 
-// recentEpisodes searches for the series' episodes that aired within
-// recentWindow of now.
 func (p *Provider) recentEpisodes(ctx context.Context, tvdbID int, now time.Time) ([]provider.Release, error) {
 	s, err := p.titles.series(ctx, tvdbID)
 	if err != nil {
@@ -197,8 +175,6 @@ func (p *Provider) recentEpisodes(ctx context.Context, tvdbID int, now time.Time
 	return out, nil
 }
 
-// rebuildFilms looks for the watched films among TVP's newest products. If
-// it can't, the feed keeps the films found before.
 func (p *Provider) rebuildFilms(ctx context.Context) {
 	start := time.Now()
 	watched := p.watchedFilms.all()
@@ -218,10 +194,8 @@ func (p *Provider) rebuildFilms(ctx context.Context) {
 	p.log.Debug("rebuilt TVP film feed", "watched", len(watched), "releases", n, "took", time.Since(start).Round(time.Second))
 }
 
-// newFilms returns the free films among TVP's newest products that match a
-// watched film, named as Radarr searched for them. Of several watched films
-// that match, the one watched first names the release. A film whose original
-// title can't be looked up is left out until the next rebuild.
+// Match free films to the oldest matching watch entry. Defer films whose
+// original title cannot be fetched until the next rebuild.
 func (p *Provider) newFilms(ctx context.Context, watched []watchRecord) ([]provider.Release, error) {
 	var res struct {
 		Items []product `json:"items"`
@@ -257,16 +231,13 @@ func (p *Provider) newFilms(ctx context.Context, watched []watchRecord) ([]provi
 			out = append(out, provider.Release{Title: w.Title, Item: movieItem(v, w.Year)})
 			continue
 		}
-		// Radarr may have searched with the original title, which only
-		// TVP's search gives. It is looked up only if the year could match.
+		// Only search provides original titles. Skip lookups when no watched year matches.
 		if !known && slices.ContainsFunc(watched, func(w watchRecord) bool { return yearFits(v, w.Year) }) {
 			lookups = append(lookups, v)
 		}
 	}
 
-	// Films not tried for longest go first, so lookups that keep failing
-	// can't use up every rebuild's time. One cut short by the rebuild's end
-	// wasn't tried.
+	// Try the least recently checked films first; cancelled lookups do not count as attempts.
 	slices.SortStableFunc(lookups, func(a, b product) int { return p.lookupTried[a.ID].Compare(p.lookupTried[b.ID]) })
 	var lookupErr error
 	failed := 0
@@ -313,8 +284,7 @@ func (p *Provider) newFilms(ctx context.Context, watched []watchRecord) ([]provi
 	return out, nil
 }
 
-// originalTitle looks the film's original title up with TVP's search: "" if
-// it has none. found is false if the search doesn't list the film yet.
+// found=false means TVP search does not list the film yet; an empty title means none was given.
 func (p *Provider) originalTitle(ctx context.Context, v product) (original string, found bool, err error) {
 	vods, err := p.search(ctx, "VOD", v.Title)
 	if err != nil {

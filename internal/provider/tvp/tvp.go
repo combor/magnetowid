@@ -25,7 +25,6 @@ const (
 	userAgent      = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130 Safari/537.36"
 )
 
-// Provider searches and resolves TVP VOD content.
 type Provider struct {
 	client        *http.Client
 	baseURL       string
@@ -35,17 +34,13 @@ type Provider struct {
 	watchedFilms  *watchList
 	seriesFeed    feed
 	filmFeed      feed
-	// originals holds the original titles of TVP's newest films, by ID, and
-	// lookupTried when a film not found in originals was last looked up.
-	// Only rebuildFilms uses them, and one rebuild runs at a time.
+	// Film title caches are owned by rebuildFilms, which runs serially.
 	originals   map[int64]string
 	lookupTried map[int64]time.Time
 	log         *slog.Logger
 }
 
-// New returns a TVP provider using client for API calls. It keeps the
-// series and films it watches for new releases in db, or only in memory if
-// db is nil.
+// A nil db keeps watch lists in memory only.
 func New(client *http.Client, log *slog.Logger, db *bolt.DB) (*Provider, error) {
 	watchedSeries, err := loadWatchList(db, seriesWatch)
 	if err != nil {
@@ -73,7 +68,6 @@ func New(client *http.Client, log *slog.Logger, db *bolt.DB) (*Provider, error) 
 
 func (p *Provider) Name() string { return "tvp" }
 
-// product is a TVP serial, season, episode or movie.
 type product struct {
 	ID            int64  `json:"id"`
 	Type          string `json:"type"`
@@ -107,7 +101,6 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 	return p.serialEpisodes(ctx, serial, q, nil)
 }
 
-// findSerial returns the free TVP serial with the title.
 func (p *Provider) findSerial(ctx context.Context, title string) (product, bool, error) {
 	serials, err := p.search(ctx, "SERIAL", title)
 	if err != nil {
@@ -117,9 +110,7 @@ func (p *Provider) findSerial(ctx context.Context, title string) (product, bool,
 	return serial, ok, nil
 }
 
-// serialEpisodes maps the *arr's season/episode onto TVP's episode numbers,
-// which often run across seasons (Ranczo's season 2 is 14-26). tv is the
-// series' TVDB data, or nil if the search didn't come with a TVDB ID.
+// TVP can number across seasons, e.g. Ranczo S2 is 14–26. tv is nil for title-only searches.
 func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provider.Query, tv *series) ([]provider.Item, error) {
 	seasons, err := p.seasons(ctx, serial.ID)
 	if err != nil {
@@ -137,10 +128,8 @@ func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provide
 		if episodes, err = p.episodes(ctx, serial.ID, season.ID); err != nil {
 			return nil, err
 		}
-		// A block's position says nothing about TVDB's seasons: M jak
-		// miłość's block 20 starts at 1901, but TVDB's S20E1 is 1452. Only
-		// season 1 and a block starting at 1 both count from the first
-		// episode; byNumber has already used that if it had TVDB's episodes.
+		// Block positions are not TVDB seasons: M jak miłość block 20
+		// starts at 1901, but S20E1 is 1452. Only season 1 can use block 1.
 		if len(bs) == 0 || (q.Season == 1 && tv == nil) {
 			items, err := p.bySeason(ctx, serial, seasons, q, episodes)
 			if err != nil || len(items) > 0 || q.Episode == 0 {
@@ -154,8 +143,7 @@ func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provide
 	return p.byAbsoluteNumber(ctx, serial, seasons, q, episodes)
 }
 
-// bySeason maps episode N of the season to TVP number start+N-1, so gaps
-// and duplicates never shift other episodes.
+// Use start+N-1 so missing or duplicate episode numbers cannot shift later matches.
 func (p *Provider) bySeason(ctx context.Context, serial product, seasons []product, q provider.Query, episodes []product) ([]provider.Item, error) {
 	start, ok, err := p.seasonStart(ctx, serial.ID, seasons, q.Season, episodes)
 	if err != nil {
@@ -181,10 +169,9 @@ func (p *Provider) bySeason(ctx context.Context, serial product, seasons []produ
 	return items, nil
 }
 
-// byAbsoluteNumber handles absolute episode numbers in an arbitrary season
-// (TVDB's Klan S15E2113 is TVP's number 2113, in its season 22). It needs the
-// number to be above every TVP number in that season, TVP's numbering to run
-// on across seasons, and exactly one match; anything unclear yields nothing.
+// Accept absolute numbers only above the requested season's range, with
+// continuous numbering across seasons and exactly one match.
+// Example: Klan S15E2113 maps to TVP episode 2113 in season 22.
 func (p *Provider) byAbsoluteNumber(ctx context.Context, serial product, seasons []product, q provider.Query, seasonEpisodes []product) ([]provider.Item, error) {
 	sorted := append([]product(nil), seasons...)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Number < sorted[j].Number })
@@ -215,8 +202,7 @@ func (p *Provider) byAbsoluteNumber(ctx context.Context, serial product, seasons
 		return nil, nil
 	}
 
-	// Absolute numbering: every season starts above the previous one's last
-	// number. Anything else (restarts, overlaps) ends the search.
+	// Reject numbering that restarts or overlaps across seasons.
 	for i := idx - 1; i >= 0; i-- {
 		prev, err := p.episodes(ctx, serial.ID, sorted[i].ID)
 		if err != nil {
@@ -285,8 +271,7 @@ func episodeItem(serial, e product, season, episode int) provider.Item {
 	}
 }
 
-// seasonStart returns the TVP number of the season's first episode when it
-// is certain: 1, or right after the previous season's last number.
+// A season starts at 1 or immediately after the previous season's last episode.
 func (p *Provider) seasonStart(ctx context.Context, serialID int64, seasons []product, number int, episodes []product) (start int, ok bool, err error) {
 	if len(episodes) == 0 {
 		return 0, false, nil
@@ -318,7 +303,7 @@ func findSeason(seasons []product, number int) (product, bool) {
 	return product{}, false
 }
 
-// seasons returns a serial's seasons. The slice is shared: don't modify it.
+// The returned slice is shared; do not modify it.
 func (p *Provider) seasons(ctx context.Context, serialID int64) ([]product, error) {
 	path := fmt.Sprintf("vods/serials/%d/seasons", serialID)
 	return cached(p.cache, path, func() ([]product, error) {
@@ -328,8 +313,7 @@ func (p *Provider) seasons(ctx context.Context, serialID int64) ([]product, erro
 	})
 }
 
-// episodes returns a season's episodes sorted by number, without specials.
-// The slice is shared: don't modify it.
+// Episodes are sorted by number, without specials. The returned slice is shared.
 func (p *Provider) episodes(ctx context.Context, serialID, seasonID int64) ([]product, error) {
 	path := fmt.Sprintf("vods/serials/%d/seasons/%d/episodes", serialID, seasonID)
 	return cached(p.cache, path, func() ([]product, error) {
@@ -360,18 +344,15 @@ func (p *Provider) searchMovies(ctx context.Context, q provider.Query) ([]provid
 			items = append(items, movieItem(v, v.Year))
 		}
 	}
-	// Radarr doesn't search again for a film it hasn't got, but looks for it
-	// in RSS sync. It is watched even if found: the item may yet be left out
-	// because its stream can't be read.
+	// Radarr relies on RSS after searching. Watch even found films,
+	// because probing may still reject their streams.
 	if q.Year > 0 && want != "" {
 		p.watchFilm(q.Title, q.Year)
 	}
 	return items, nil
 }
 
-// filmMatches reports whether v is the film with the normalized title and
-// the year, which may be one off, as TVP's years sometimes are. A year of 0
-// is unknown.
+// Allow a one-year discrepancy in TVP dates; year=0 is unknown.
 func filmMatches(v product, normalized string, year int) bool {
 	return titleMatches(v, normalized) && yearFits(v, year)
 }
@@ -380,7 +361,7 @@ func yearFits(v product, year int) bool {
 	return year == 0 || v.Year == 0 || abs(v.Year-year) <= 1
 }
 
-// movieItem is the film v. year names the release when the query has none.
+// Use the provider's year when the query omits it.
 func movieItem(v product, year int) provider.Item {
 	return provider.Item{
 		ID:        strconv.FormatInt(v.ID, 10),
@@ -392,7 +373,6 @@ func movieItem(v product, year int) provider.Item {
 	}
 }
 
-// pick returns the first free serial whose title matches exactly.
 func (p *Provider) pick(serials []product, title string) (product, bool) {
 	want := provider.NormalizeTitle(title)
 	var matches []product
@@ -415,7 +395,7 @@ func titleMatches(v product, normalized string) bool {
 		(v.OriginalTitle != "" && provider.NormalizeTitle(v.OriginalTitle) == normalized)
 }
 
-// search returns TVP's search results. The slice is shared: don't modify it.
+// The returned slice is shared; do not modify it.
 func (p *Provider) search(ctx context.Context, kind, keyword string) ([]product, error) {
 	path, params := "vods/search/"+kind, url.Values{"keyword": {keyword}}
 	return cached(p.cache, path+"?"+params.Encode(), func() ([]product, error) {
@@ -427,8 +407,7 @@ func (p *Provider) search(ctx context.Context, kind, keyword string) ([]product,
 	})
 }
 
-// Resolve returns the current stream URL. It embeds the requester's IP and a
-// date, so it is only good for an immediate download, and is never cached.
+// Stream URLs embed the requester's IP and expire; resolve at download time, never cache.
 func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, error) {
 	if _, err := strconv.ParseInt(id, 10, 64); err != nil {
 		return provider.Stream{}, fmt.Errorf("tvp: invalid id %q", id)
@@ -464,10 +443,7 @@ func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, err
 	return s, nil
 }
 
-// playlistSubtitle is TTML subtitles in a playlist, such as
-// {"url":"https://s.tvp.pl/…/….xml","language":"POLISH_DLA_NIESLYSZACYCH","isoCode":"POL"}.
-// The language names them; "DLA_NIESLYSZACYCH" is for the deaf and hard of
-// hearing.
+// DLA_NIESLYSZACYCH in the language name marks SDH; isoCode gives the language code.
 type playlistSubtitle struct {
 	URL      string `json:"url"`
 	Language string `json:"language"`
@@ -490,7 +466,6 @@ type apiError struct {
 
 func (e *apiError) Error() string { return "tvp: " + e.reason() }
 
-// permanent reports whether retrying cannot help.
 func (e *apiError) permanent() bool {
 	return e.status >= 400 && e.status < 500 &&
 		e.status != http.StatusRequestTimeout && e.status != http.StatusTooManyRequests

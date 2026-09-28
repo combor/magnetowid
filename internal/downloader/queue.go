@@ -35,14 +35,13 @@ const (
 	StatusFailed      Status = "Failed"
 )
 
-// Retry waits grow 4x from firstRetryDelay: 5s, 20s, 80s, 320s, 10m.
 const (
 	maxRetries      = 5
 	firstRetryDelay = 5 * time.Second
 	maxRetryDelay   = 10 * time.Minute
 )
 
-// backoff returns the wait before retry number n (1-based).
+// n is a one-based retry count.
 func backoff(n int) time.Duration {
 	d := firstRetryDelay
 	for i := 1; i < n && d < maxRetryDelay; i++ {
@@ -53,19 +52,16 @@ func backoff(n int) time.Duration {
 
 var (
 	errUnknownProvider = errors.New("unknown provider")
-	// errUnreachable marks a failure to reach the provider at all, as opposed
-	// to one item's stream.
+	// A provider outage, not an individual stream failure.
 	errUnreachable = errors.New("provider unreachable")
-	// errPaused stops a download whose job, or the whole queue, was paused.
-	errPaused = errors.New("paused")
+	errPaused      = errors.New("paused")
 )
 
-// Engine fetches a stream into out.
 type Engine interface {
 	Download(ctx context.Context, s provider.Stream, out string, progress func(done time.Duration, bytes int64)) error
 }
 
-// Job is a snapshot of one download. The JSON form is its database record.
+// Job is a download snapshot; its JSON form is persisted.
 type Job struct {
 	ID       string    `json:"id"`
 	Name     string    `json:"name"`
@@ -83,20 +79,15 @@ type Job struct {
 	Attempts int       `json:"attempts,omitzero"`
 	RetryAt  time.Time `json:"retry_at,omitzero"`
 	Priority int       `json:"priority,omitzero"` // -1 low, 0 normal, 1 high, 2 force
-	// Paused holds a queued job until it is resumed. It isn't a Status, so
-	// an older magnetowid, which doesn't know it, downloads the job.
+	// Separate from Status so older versions can still load paused jobs.
 	Paused bool `json:"paused,omitzero"`
 }
 
-// historyRetention is how long finished jobs are kept. Sonarr/Radarr handle
-// them within minutes and usually remove them themselves.
 const historyRetention = 30 * 24 * time.Hour
 
-// incompleteDir, under the download root, holds one work folder per running job.
 const incompleteDir = ".incomplete"
 
-// Queue runs jobs with a single worker. It keeps them in memory and saves
-// them to the job database when added, deleted or done with an attempt.
+// Queue downloads one job at a time and persists state changes.
 type Queue struct {
 	dir       string
 	providers *provider.Registry
@@ -111,18 +102,16 @@ type Queue struct {
 	order   []string
 	cancels map[string]context.CancelCauseFunc
 	outages map[string]*outage // by provider name
-	paused  bool               // the whole queue
+	paused  bool
 	wake    chan struct{}
 }
 
-// outage pauses a provider's jobs after it couldn't be reached n times in a row.
 type outage struct {
 	n     int
 	until time.Time
 }
 
-// New returns the queue that downloads into dir, which must be absolute, and
-// saves its jobs in db. Close db only after Run has returned.
+// New requires an absolute download path. Close db only after Run returns.
 func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, log *slog.Logger) (*Queue, error) {
 	jobs, err := loadJobs(db)
 	if err != nil {
@@ -132,7 +121,7 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 	if err != nil {
 		return nil, err
 	}
-	// Nothing is running yet, so any work folders are left over from a crash.
+	// Before the worker starts, all work folders are crash leftovers.
 	if err := os.RemoveAll(filepath.Join(dir, incompleteDir)); err != nil {
 		log.Warn("removing unfinished downloads", "err", err)
 	}
@@ -157,11 +146,9 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 	return q, nil
 }
 
-// Dir returns the download root.
 func (q *Queue) Dir() string { return q.dir }
 
-// Add queues a job, paused if paused, and returns its SABnzbd-style ID.
-// Higher priority jobs start first. It fails if the job can't be saved.
+// Add returns a SABnzbd job ID only after saving the job. Higher priorities run first.
 func (q *Queue) Add(name, nzbName, category string, priority int, paused bool, ref nzb.Ref) (string, error) {
 	job := &Job{
 		ID:       "SABnzbd_nzo_" + randomHex(8),
@@ -188,7 +175,6 @@ func (q *Queue) Add(name, nzbName, category string, priority int, paused bool, r
 	return job.ID, nil
 }
 
-// wakeUp has the worker look for a job to start.
 func (q *Queue) wakeUp() {
 	select {
 	case q.wake <- struct{}{}:
@@ -196,17 +182,14 @@ func (q *Queue) wakeUp() {
 	}
 }
 
-// Paused reports whether the whole queue is paused.
 func (q *Queue) Paused() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.paused
 }
 
-// SetPaused pauses or resumes the whole queue. Pausing stops the running
-// download, which starts again from the beginning once resumed: ffmpeg can't
-// carry on from where it stopped. It fails, changing nothing, if the change
-// can't be saved.
+// SetPaused stops or resumes the queue. Resumed downloads restart from the beginning.
+// A save failure leaves the queue unchanged.
 func (q *Queue) SetPaused(paused bool) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -229,16 +212,13 @@ func (q *Queue) SetPaused(paused bool) error {
 	return nil
 }
 
-// PauseJobs pauses the queued and running jobs among ids, and returns their
-// IDs. A running download stops, and starts again from the beginning once
-// resumed. It fails if a change can't be saved; the jobs before it keep
-// theirs.
+// PauseJobs returns affected IDs. Resumed downloads restart from the beginning.
+// On a save failure, earlier changes remain applied.
 func (q *Queue) PauseJobs(ids ...string) ([]string, error) {
 	return q.setJobsPaused(true, ids)
 }
 
-// ResumeJobs resumes the paused jobs among ids, and returns the IDs of the
-// queued and running ones. It fails as PauseJobs does.
+// ResumeJobs returns affected IDs, with the same partial-save behavior as PauseJobs.
 func (q *Queue) ResumeJobs(ids ...string) ([]string, error) {
 	return q.setJobsPaused(false, ids)
 }
@@ -247,7 +227,7 @@ func (q *Queue) setJobsPaused(paused bool, ids []string) ([]string, error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	var done []string
-	// Also if a save fails after others resumed jobs.
+	// Wake resumed jobs even if a later save fails.
 	defer func() {
 		if !paused && len(done) > 0 {
 			q.wakeUp()
@@ -259,7 +239,7 @@ func (q *Queue) setJobsPaused(paused bool, ids []string) ([]string, error) {
 			continue
 		}
 		if job.Paused != paused {
-			// Saved as it will be once stopped: running isn't saved.
+			// Persist as queued so a crash cannot leave a job marked as running.
 			saved := *job
 			saved.Paused = paused
 			if saved.Status == StatusDownloading {
@@ -283,7 +263,7 @@ func (q *Queue) setJobsPaused(paused bool, ids []string) ([]string, error) {
 	return done, nil
 }
 
-// Jobs returns snapshots of all jobs in the order they were added.
+// Jobs returns snapshots in insertion order.
 func (q *Queue) Jobs() []Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -294,9 +274,8 @@ func (q *Queue) Jobs() []Job {
 	return out
 }
 
-// Delete removes a job, cancelling it if running, and with deleteFiles its
-// folder. It returns false if there is no such job, and an error, changing
-// nothing, if the removal can't be saved.
+// Delete cancels the job and optionally removes its files. It returns false for
+// unknown IDs; a save failure leaves the job unchanged.
 func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
 	q.mu.Lock()
 	job, ok := q.jobs[id]
@@ -316,7 +295,7 @@ func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
 		}
 	}
 	cancel := q.cancels[id]
-	// Under the lock, so moveToComplete can't reuse the path meanwhile.
+	// Hold the lock to prevent moveToComplete from reusing this path.
 	if deleteFiles && job.Storage != "" {
 		if err := os.RemoveAll(job.Storage); err != nil {
 			q.log.Warn("removing job files", "id", id, "err", err)
@@ -331,10 +310,9 @@ func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
 	return true, nil
 }
 
-// Run processes queued jobs until ctx is cancelled.
 func (q *Queue) Run(ctx context.Context) {
 	for {
-		// Checked first, so a cancelled queue doesn't start the next job.
+		// Check before selecting work so cancellation cannot start another job.
 		if ctx.Err() != nil {
 			return
 		}
@@ -360,9 +338,8 @@ func (q *Queue) Run(ctx context.Context) {
 	}
 }
 
-// next starts the ready job with the highest priority, oldest first. If none
-// is ready, wait is the time until the earliest retry or end of a provider
-// pause.
+// next selects the highest priority, oldest ready job. Otherwise wait is the
+// time until the next retry or provider recovery attempt.
 func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -410,7 +387,7 @@ func (q *Queue) process(parent context.Context, id string) {
 		return
 	}
 	q.cancels[id] = cancel
-	// A pause since next picked the job had nothing to cancel yet.
+	// Catch pauses made after next selected this job, before a cancel function existed.
 	if q.paused || job.Paused {
 		cancel(errPaused)
 	}
@@ -435,8 +412,7 @@ func (q *Queue) process(parent context.Context, id string) {
 		}
 		return
 	}
-	// Every outcome below is saved; progress while running is not, so a
-	// crash leaves the job Queued with its earlier attempts.
+	// Persist outcomes, not running progress, so crashes leave jobs queued for retry.
 	defer func() {
 		if err := q.put(job); err != nil {
 			q.log.Warn("database write failed", "err", err)
@@ -444,7 +420,7 @@ func (q *Queue) process(parent context.Context, id string) {
 		q.prune(time.Now())
 	}()
 	if err != nil && parent.Err() != nil {
-		// Interrupted by shutdown, which is not the job's fault.
+		// Shutdown does not consume a retry.
 		requeue(job)
 		q.log.Info("job interrupted, requeued", "id", id, "name", job.Name)
 		return
@@ -455,8 +431,7 @@ func (q *Queue) process(parent context.Context, id string) {
 		return
 	}
 	if errors.Is(err, errUnreachable) {
-		// The provider is unreachable, so every job for it would fail the
-		// same way. Pause them all rather than use up this job's retries.
+		// Provider outages pause all its jobs without consuming retries.
 		requeue(job)
 		job.Error = err.Error()
 		o := q.outages[job.Ref.Provider]
@@ -495,8 +470,7 @@ func (q *Queue) process(parent context.Context, id string) {
 	q.log.Info("job completed", "id", id, "name", job.Name, "storage", storage, "bytes", job.Bytes)
 }
 
-// prune forgets finished jobs older than historyRetention but leaves their
-// files, which belong to Sonarr/Radarr. q.mu must be held.
+// prune removes expired history but keeps downloaded files. Requires q.mu.
 func (q *Queue) prune(now time.Time) {
 	var old []string
 	for _, id := range q.order {
@@ -508,7 +482,7 @@ func (q *Queue) prune(now time.Time) {
 	if len(old) == 0 {
 		return
 	}
-	// Kept in memory until removed on disk, so a failure is retried next time.
+	// Keep failed removals in memory to retry next time.
 	if err := q.remove(old...); err != nil {
 		q.log.Warn("database write failed", "err", err)
 		return
@@ -520,31 +494,28 @@ func (q *Queue) prune(now time.Time) {
 	q.log.Info("forgot old finished jobs", "count", len(old))
 }
 
-// requeue returns a started job to the queue without counting the attempt.
+// Requeue without consuming a retry.
 func requeue(job *Job) {
 	job.Status = StatusQueued
 	job.Attempts--
 	job.Fraction, job.Bytes = 0, 0
 }
 
-// offline reports whether err is a network failure (DNS, connection or
-// timeout) rather than a problem with the item.
+// offline distinguishes network failures from item-specific errors.
 func offline(err error) bool {
 	var op *net.OpError
 	var ne net.Error
 	return errors.As(err, &op) || (errors.As(err, &ne) && ne.Timeout())
 }
 
-// retryable reports whether a failed attempt is worth retrying.
 func retryable(err error) bool {
 	return !errors.Is(err, provider.ErrUnavailable) &&
 		!errors.Is(err, errUnknownProvider)
 }
 
-// run makes one download attempt and returns the completed folder.
 func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string, error) {
 	if err := context.Cause(ctx); err != nil {
-		return "", err // stopped before it began
+		return "", err
 	}
 	p, ok := q.providers.Get(j.Ref.Provider)
 	if !ok {
@@ -586,10 +557,7 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 	return q.moveToComplete(out, subs, j.Category, j.Name)
 }
 
-// saveSubtitles saves the stream's subtitles in work as SRT files named
-// after the video, and returns their paths. They are extras: subtitles that
-// can't be had are left out, with a warning, and the video kept. It fails
-// only if ctx ends.
+// Subtitle failures are logged and skipped; only cancellation fails the download.
 func (q *Queue) saveSubtitles(ctx context.Context, j Job, s provider.Stream, work string) ([]string, error) {
 	var paths []string
 	for _, sub := range s.Subtitles {
@@ -614,9 +582,7 @@ func (q *Queue) saveSubtitles(ctx context.Context, j Job, s provider.Stream, wor
 	return paths, nil
 }
 
-// subtitleName names subtitles as Sonarr, Radarr and media servers read
-// them: after the video, then the language and "sdh" if they are for the
-// deaf and hard of hearing, e.g. "{video}.pol.sdh.srt".
+// Use the media-server convention: {video}.{language}[.sdh].srt.
 func subtitleName(video string, s provider.Subtitle) string {
 	name := video
 	if s.Language != "" {
@@ -628,9 +594,8 @@ func subtitleName(video string, s provider.Subtitle) string {
 	return name + ".srt"
 }
 
-// moveToComplete moves out to {dir}/{category}/{name}/{name}.mp4, with the
-// extras beside it, trying name.1, name.2, ... if the folder exists or
-// another job references it. An extra that can't be moved is left out.
+// Reserve a unique {dir}/{category}/{name} folder for the video and extras.
+// Existing folders and job records reserve names; failed extras are skipped.
 func (q *Queue) moveToComplete(out string, extras []string, category, name string) (string, error) {
 	parent := q.dir
 	if c := SanitizeName(category); category != "" && category != "*" && c != "" {

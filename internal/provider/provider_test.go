@@ -26,7 +26,6 @@ func TestNormalizeTitle(t *testing.T) {
 	}
 }
 
-// Raw and *arr-cleaned titles must match.
 func TestNormalizeTitleMatchesArrCleaning(t *testing.T) {
 	pairs := [][2]string{
 		{"The Killing", "Killing"},
@@ -66,7 +65,6 @@ func TestRegistry(t *testing.T) {
 	NewRegistry(named("tvp"), named("tvp"))
 }
 
-// Requests are served concurrently; run with -race.
 func TestNormalizeTitleConcurrent(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {

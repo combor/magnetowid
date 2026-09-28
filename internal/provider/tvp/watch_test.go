@@ -25,8 +25,6 @@ func openStore(t *testing.T, dir string) *bolt.DB {
 	return db
 }
 
-// watchingProvider is newProvider with fake title lookups and its watch
-// list in db.
 func watchingProvider(t *testing.T, db *bolt.DB) *Provider {
 	t.Helper()
 	p := newProvider(t)
@@ -93,8 +91,6 @@ func TestCorruptWatchRecordFailsNew(t *testing.T) {
 	}
 }
 
-// Radarr doesn't search again for a film it hasn't got, so magnetowid watches
-// for it.
 func TestFilmSearchWatches(t *testing.T) {
 	p := newProviderWith(t, func(key string) (string, bool) {
 		switch key {
@@ -162,7 +158,6 @@ func TestFilmWatchListPersists(t *testing.T) {
 	}
 }
 
-// A search doesn't fail because the watch list can't be saved.
 func TestWatchSaveFailure(t *testing.T) {
 	db := openStore(t, t.TempDir())
 	p := watchingProvider(t, db)
@@ -176,8 +171,6 @@ func TestWatchSaveFailure(t *testing.T) {
 	}
 }
 
-// A newly watched series joins the feed at the next RSS sync, not feedTTL
-// later.
 func TestWatchingMarksFeedStale(t *testing.T) {
 	p := newProvider(t)
 	p.seriesFeed.built = time.Now()

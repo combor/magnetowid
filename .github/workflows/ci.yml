@@ -88,8 +88,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends ffmpeg
           ffmpeg -hide_banner -encoders | grep -w libx264
-      # Pulls the pinned Sonarr and Radarr images, runs them with magnetowid
-      # and fakes of the sites it reads, and checks what they grab and import.
       - name: Run magnetowid with Sonarr and Radarr
         run: make integration
 
@@ -103,7 +101,6 @@ jobs:
         with:
           go-version-file: 'go.mod'
           cache: true
-      # Also checks the GoReleaser configuration before a release needs it.
       - name: Build the packages
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -124,15 +121,14 @@ jobs:
       - package-smoke
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
-    # Notarization waits on Apple per darwin binary in turn, up to 20 minutes
-    # each, on top of build and upload.
+    # Allow up to 20 minutes of notarization per macOS binary, plus build/upload.
     timeout-minutes: 60
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Allow goreleaser to access older tag information.
+          # GoReleaser needs previous tags.
           fetch-depth: 0
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -159,12 +155,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GPG_KEY_PATH: ${{ runner.temp }}/rpm-signing-private.asc
           AUR_KEY: ${{ secrets.AUR_KEY }}
-          # These tokens need contents write access to their package repositories.
+          # Tokens need contents:write on the package repositories.
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
           SCOOP_BUCKET_GITHUB_TOKEN: ${{ secrets.SCOOP_BUCKET_GITHUB_TOKEN }}
           NUR_GITHUB_TOKEN: ${{ secrets.NUR_GITHUB_TOKEN }}
-          # Developer ID certificate and App Store Connect key used to sign and
-          # notarize the darwin binaries. Without them the binaries ship unsigned.
+          # Without these credentials, macOS binaries ship unsigned.
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
           MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
           MACOS_NOTARY_KEY: ${{ secrets.MACOS_NOTARY_KEY }}
@@ -183,8 +178,7 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Go cross-compiles the arm64 binary, but the runtime stage installs
-      # ffmpeg with apk, which needs arm64 emulation.
+      # Installing ffmpeg in the arm64 runtime requires emulation.
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -196,7 +190,7 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/combor/magnetowid
-          # A prerelease tag such as v0.4.0-rc1 must not move latest.
+          # Prereleases must not move latest.
           flavor: latest=false
           tags: |
             type=ref,event=tag

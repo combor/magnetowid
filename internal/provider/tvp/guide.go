@@ -10,25 +10,19 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// TVP's TV guide names the episode of a soap each broadcast was ("M jak
-// miłość - odc. 1943"), which ties TVDB's air time to TVP's number. It keeps
-// about three weeks of past broadcasts.
+// TVP's guide links broadcast times to soap episode numbers and retains about three weeks.
 
 const (
-	// guideWindow is how far back the guide is asked about.
 	guideWindow = 20 * 24 * time.Hour
-	// guideSlack is how far from TVDB's air time a broadcast may start.
-	guideSlack = time.Hour
-	// guideTimeLayout is the guide's format for times.
+	// Allow for differences between TVDB air times and TVP broadcasts.
+	guideSlack      = time.Hour
 	guideTimeLayout = "2006-01-02T15:04-0700"
 )
 
-// guideChannels are TVP 1 and TVP 2, where the soaps are first broadcast.
-// The IDs are from TVP's list of channels, lives.
+// TVP 1 and TVP 2; IDs from TVP's lives endpoint.
 var guideChannels = []string{"399697", "399698"}
 
-// programmeTitle is a broadcast of an episode, e.g. "Klan - odc. 4738" or
-// "Na dobre i na złe - odc. 998 Świat powinien się skończyć".
+// Match titles such as "Klan - odc. 4738".
 var programmeTitle = regexp.MustCompile(`^(.+?) - odc\. (\d+)\b`)
 
 type programme struct {
@@ -36,9 +30,7 @@ type programme struct {
 	Since string `json:"since"`
 }
 
-// broadcastNumber returns TVP's number of the serial's episode broadcast
-// within guideSlack of at. Reruns of older episodes can air the same
-// evening, so it takes the newest.
+// Choose the newest episode near the air time; older reruns can air the same evening.
 func (p *Provider) broadcastNumber(ctx context.Context, serialTitle string, at time.Time) (int, bool, error) {
 	path, params := "lives/programmes", url.Values{
 		"liveId[]": guideChannels,

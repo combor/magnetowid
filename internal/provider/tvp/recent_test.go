@@ -16,7 +16,6 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// feedReleases returns p's feed by episode ID, without starting a rebuild.
 func feedReleases(p *Provider) []provider.Release {
 	p.seriesFeed.mu.Lock()
 	defer p.seriesFeed.mu.Unlock()
@@ -36,8 +35,6 @@ func describe(rs []provider.Release) string {
 	return strings.Join(s, ", ")
 }
 
-// The feed has the watched series' episodes that aired within the window
-// and are free, named with Sonarr's title.
 func TestFeedRebuild(t *testing.T) {
 	p := newProvider(t)
 	fakeTitles(t, p)
@@ -76,9 +73,7 @@ func TestFeedKeepsReleasesOfFailedSeries(t *testing.T) {
 	}
 }
 
-// An episode that turns free is dated by the rebuild that found it, not by
-// TVP, which dates premieres from when they were listed as paid. It is then
-// newer than anything else in the feed, so it comes first in RSS sync.
+// TVP dates premieres while still paid; use discovery time so free releases precede the RSS cutoff.
 func TestFeedDatesReleasesWhenFirstSeen(t *testing.T) {
 	var free atomic.Bool
 	p := newProviderWith(t, func(key string) (string, bool) {
@@ -113,7 +108,6 @@ func TestFeedDatesReleasesWhenFirstSeen(t *testing.T) {
 	}
 }
 
-// waitIdle waits for the feed's rebuild, if one is running, to finish.
 func waitIdle(t *testing.T, f *feed) {
 	t.Helper()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
@@ -129,8 +123,6 @@ func waitIdle(t *testing.T, f *feed) {
 	}
 }
 
-// RSS sync never waits for TVP: Recent returns the last feed and rebuilds
-// it in the background, one rebuild at a time.
 func TestRecentRebuildsInBackground(t *testing.T) {
 	p := newProvider(t)
 	fakeTitles(t, p)
@@ -183,7 +175,6 @@ func TestRecentRebuildsInBackground(t *testing.T) {
 	recent()
 	check("feedTTL later", 3)
 
-	// Films have a feed of their own.
 	var filmRebuilds atomic.Int32
 	p.filmFeed.rebuild = func(context.Context) { filmRebuilds.Add(1) }
 	p.filmFeed.found = map[int][]provider.Release{filmsKey: {{Title: "Kler", Item: provider.Item{ID: "9"}}}}
@@ -197,11 +188,9 @@ func TestRecentRebuildsInBackground(t *testing.T) {
 	check("films", 3)
 }
 
-// newestProductsKey is the request for TVP's newest products.
 const newestProductsKey = "/vods?maxResults=100&order=desc&sort=createdAt"
 
-// newestProductsFixture is TVP's newest products, trimmed (2026-09-28). %t
-// is whether Pachnidło is paid.
+// Trimmed TVP response (2026-09-28); %t controls whether Pachnidło is paid.
 const newestProductsFixture = `{"meta":{"totalCount":6359,"firstResult":0,"maxResults":100},"items":[
 	{"type":"VOD","id":1,"title":"Kler","year":2019,"duration":7980,"payable":false,"since":"2026-09-20T09:00:00+02:00"},
 	{"type":"VOD","id":2,"title":"Pachnidło: Historia mordercy","year":2006,"duration":8820,"payable":%t},
@@ -216,9 +205,7 @@ var pachnidloSearchKey = "/vods/search/VOD?" + url.Values{"keyword": {"Pachnidł
 const pachnidloSearch = `{"items":[{"type":"VOD","id":2,"title":"Pachnidło: Historia mordercy",
 	"originalTitle":"Perfume: The Story of a Murderer","year":2006,"duration":8820}]}`
 
-// filmProvider is a provider watching films that Radarr searched for and
-// TVP didn't have, with its requests recorded. serve overrides the TVP
-// fixtures, as for newProviderWith.
+// serve overrides TVP fixtures as in newProviderWith.
 func filmProvider(t *testing.T, serve func(key string) (string, bool)) (*Provider, *pathRecorder) {
 	t.Helper()
 	p := newProviderWith(t, func(key string) (string, bool) {
@@ -252,7 +239,6 @@ func filmProvider(t *testing.T, serve func(key string) (string, bool)) (*Provide
 	return p, rec
 }
 
-// filmReleases returns p's film feed by ID, without starting a rebuild.
 func filmReleases(p *Provider) []provider.Release {
 	p.filmFeed.mu.Lock()
 	defer p.filmFeed.mu.Unlock()
@@ -281,8 +267,6 @@ func (r *pathRecorder) count(path string) int {
 	return n
 }
 
-// The film feed has the free films among TVP's newest that Radarr searched
-// for, named with Radarr's title and year.
 func TestFilmFeedRebuild(t *testing.T) {
 	p, rec := filmProvider(t, nil)
 	p.rebuildFilms(context.Background())
@@ -295,9 +279,7 @@ func TestFilmFeedRebuild(t *testing.T) {
 			t.Errorf("release = %+v, want a film published when first found", r)
 		}
 	}
-	// Pachnidło's original title is looked up, as its title matches no
-	// watched film but its year does. Niechciany's and Stary's years match
-	// none, so they aren't.
+	// Only Pachnidło has a matching year without a matching title, requiring one lookup.
 	if n := rec.count("/vods/search/VOD"); n != 1 {
 		t.Errorf("%d searches, want 1", n)
 	}
@@ -342,8 +324,6 @@ func TestFilmFeedKeepsFilmsWhenListingFails(t *testing.T) {
 	}
 }
 
-// A film whose original title can't be looked up is left out until it can
-// be; the other films are still offered.
 func TestFilmFeedRetriesFailedLookups(t *testing.T) {
 	var failing atomic.Bool
 	failing.Store(true)
@@ -361,9 +341,7 @@ func TestFilmFeedRetriesFailedLookups(t *testing.T) {
 	}
 }
 
-// Films not tried for longest are looked up first, so lookups that keep
-// failing, or keep missing the film, can't use up every rebuild's time. One
-// cut short by the rebuild's end wasn't tried.
+// Cancelled lookups must not count as attempts.
 func TestFilmFeedLooksUpUntriedFilmsFirst(t *testing.T) {
 	const wonnaKey = "/vods/search/VOD?keyword=Wonna"
 	var mu sync.Mutex
@@ -372,7 +350,6 @@ func TestFilmFeedLooksUpUntriedFilmsFirst(t *testing.T) {
 	p, _ := filmProvider(t, func(key string) (string, bool) {
 		switch key {
 		case newestProductsKey:
-			// Wonna's year fits a watched film, so it is looked up too.
 			return strings.TrimSuffix(fmt.Sprintf(newestProductsFixture, false), "]}") +
 				`,{"type":"VOD","id":7,"title":"Wonna","year":2006}]}`, true
 		case pachnidloSearchKey, wonnaKey:
@@ -421,8 +398,6 @@ func TestFilmFeedLooksUpUntriedFilmsFirst(t *testing.T) {
 	}
 }
 
-// A film that turns free is dated by the rebuild that found it, so it comes
-// first in RSS sync.
 func TestFilmFeedDatesFilmsWhenFirstSeen(t *testing.T) {
 	var free atomic.Bool
 	p, _ := filmProvider(t, func(key string) (string, bool) {
@@ -447,7 +422,6 @@ func TestFilmFeedDatesFilmsWhenFirstSeen(t *testing.T) {
 	}
 }
 
-// pathRecorder records the paths of requests.
 type pathRecorder struct {
 	next  http.RoundTripper
 	mu    sync.Mutex
@@ -461,8 +435,6 @@ func (r *pathRecorder) RoundTrip(req *http.Request) (*http.Response, error) {
 	return r.next.RoundTrip(req)
 }
 
-// A rebuild that runs out of time goes on next time with the series it
-// didn't reach, so the same ones aren't left out every time.
 func TestFeedRebuildGoesOnWhereItStopped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := newProviderWith(t, func(key string) (string, bool) {

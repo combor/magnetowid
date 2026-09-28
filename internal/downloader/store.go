@@ -11,13 +11,11 @@ import (
 )
 
 var (
-	jobsBucket = []byte("jobs")
-	// queueBucket holds the queue's own state: pausedKey while it is paused.
+	jobsBucket  = []byte("jobs")
 	queueBucket = []byte("queue")
 	pausedKey   = []byte("paused")
 )
 
-// loadJobs returns the jobs saved in db, oldest first.
 func loadJobs(db *bolt.DB) ([]*Job, error) {
 	var jobs []*Job
 	err := db.Update(func(tx *bolt.Tx) error {
@@ -37,14 +35,13 @@ func loadJobs(db *bolt.DB) ([]*Job, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading jobs from %s: %w", db.Path(), err)
 	}
-	// Keys are random IDs, so restore the order jobs were added in.
+	// Random job IDs do not preserve insertion order.
 	slices.SortFunc(jobs, func(a, b *Job) int {
 		return cmp.Or(a.Added.Compare(b.Added), strings.Compare(a.ID, b.ID))
 	})
 	return jobs, nil
 }
 
-// loadPaused reports whether the whole queue was paused.
 func loadPaused(db *bolt.DB) (bool, error) {
 	var paused bool
 	err := db.View(func(tx *bolt.Tx) error {
@@ -59,7 +56,7 @@ func loadPaused(db *bolt.DB) (bool, error) {
 	return paused, nil
 }
 
-// putPaused saves whether the whole queue is paused. q.mu must be held.
+// Requires q.mu.
 func (q *Queue) putPaused(paused bool) error {
 	err := q.db.Update(func(tx *bolt.Tx) error {
 		b, err := tx.CreateBucketIfNotExists(queueBucket)
@@ -77,7 +74,7 @@ func (q *Queue) putPaused(paused bool) error {
 	return nil
 }
 
-// put saves job. q.mu must be held, so saves of one job can't reorder.
+// Requires q.mu to preserve save order.
 func (q *Queue) put(job *Job) error {
 	v, err := json.Marshal(job)
 	if err == nil {
@@ -91,7 +88,7 @@ func (q *Queue) put(job *Job) error {
 	return nil
 }
 
-// remove deletes jobs from the database. q.mu must be held.
+// Requires q.mu.
 func (q *Queue) remove(ids ...string) error {
 	err := q.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(jobsBucket)

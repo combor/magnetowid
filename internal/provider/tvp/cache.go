@@ -5,13 +5,10 @@ import (
 	"time"
 )
 
-// apiCacheTTL covers a season search's per-episode fallback and a feed
-// rebuild, which ask for the same lists again, and is short enough that new
-// episodes show up soon.
+// Reuse listings across season searches and feed rebuilds without delaying new episodes for long.
 const apiCacheTTL = 10 * time.Minute
 
-// responseCache keeps decoded TVP responses, which are much smaller than the
-// JSON. It is safe for concurrent use.
+// Cache decoded responses to save memory. Safe for concurrent use.
 type responseCache struct {
 	now func() time.Time // for tests
 
@@ -28,9 +25,7 @@ func newResponseCache() *responseCache {
 	return &responseCache{now: time.Now, entries: make(map[string]cacheEntry)}
 }
 
-// cached returns the value cached under key, or what fetch returns, which
-// is cached unless it is an error. The value is shared, so callers must not
-// modify it.
+// Cache successful fetches only. Returned values are shared and must not be modified.
 func cached[T any](c *responseCache, key string, fetch func() (T, error)) (T, error) {
 	now := c.now()
 	c.mu.Lock()

@@ -15,7 +15,6 @@ import (
 	"golang.org/x/text/unicode/norm"
 )
 
-// Kind is a movie or a TV episode.
 type Kind int
 
 const (
@@ -33,7 +32,7 @@ func (k Kind) String() string {
 	return "unknown"
 }
 
-// Query is a title search as sent by Sonarr or Radarr.
+// Query uses Sonarr/Radarr titles and numbering.
 type Query struct {
 	Kind    Kind
 	Title   string // the *arr's q, without a trailing year for movies
@@ -42,7 +41,6 @@ type Query struct {
 	Episode int // 0 = whole season
 }
 
-// Item is a search hit that can be offered as a release.
 type Item struct {
 	ID                    string // passed to Resolve
 	Kind                  Kind
@@ -52,14 +50,12 @@ type Item struct {
 	Published             time.Time
 }
 
-// Stream is what the download engine fetches.
 type Stream struct {
 	URL       string // anything ffmpeg can open
 	Header    http.Header
 	Subtitles []Subtitle // saved next to the video
 }
 
-// Subtitle is a stream's subtitles in one language.
 type Subtitle struct {
 	URL      string // fetched with the stream's Header
 	Format   string // TTML, the only one read so far
@@ -67,49 +63,40 @@ type Subtitle struct {
 	SDH      bool   // for the deaf and hard of hearing
 }
 
-// TTML is W3C Timed Text, a Subtitle Format.
 const TTML = "ttml"
 
-// Provider is one VOD site.
 type Provider interface {
 	Name() string // URL path and release group, e.g. "tvp"
 	Search(ctx context.Context, q Query) ([]Item, error)
 	Resolve(ctx context.Context, id string) (Stream, error) // called at download time
 }
 
-// TVDBSearcher is a Provider that can find a series by its TVDB ID alone.
-// Sonarr searches that way first, and by title only when that finds nothing.
+// TVDBSearcher enables Sonarr's ID search, which precedes its title search.
 type TVDBSearcher interface {
-	// SearchTVDB is Search for the series with the TVDB ID; q has no Title.
-	// It also returns Sonarr's title for the series, which names the
-	// releases, as Sonarr won't import a release it matched only by ID.
+	// q has no title. Return Sonarr's title for import matching; ID-only matches cannot be imported.
 	SearchTVDB(ctx context.Context, tvdbID int, q Query) (title string, items []Item, err error)
 }
 
-// Release is an Item with the *arr's title, which names the release.
+// Release pairs a provider item with the client's title for import matching.
 type Release struct {
 	Title string
 	Item
 }
 
-// RecentLister is a Provider that offers new releases to RSS sync, which is
-// how Sonarr and Radarr find new episodes and films without searching.
+// RecentLister supplies releases for Sonarr/Radarr RSS sync.
 type RecentLister interface {
-	// Recent returns new releases of the kind. It must return quickly: RSS
-	// sync has a timeout, and errors count against the indexer.
+	// Return promptly: timeouts and errors count against the indexer.
 	Recent(ctx context.Context, kind Kind) ([]Release, error)
 }
 
-// ErrUnavailable marks content that can't be downloaded (DRM, geo-blocked,
-// paid). It is not retried.
+// ErrUnavailable marks DRM, paid, or region-blocked content. It is not retried.
 var ErrUnavailable = errors.New("content unavailable")
 
-// Registry maps provider names to providers.
 type Registry struct {
 	byName map[string]Provider
 }
 
-// NewRegistry builds a registry. Provider names must be unique.
+// Provider names must be unique.
 func NewRegistry(ps ...Provider) *Registry {
 	r := &Registry{byName: make(map[string]Provider, len(ps))}
 	for _, p := range ps {
@@ -121,13 +108,12 @@ func NewRegistry(ps ...Provider) *Registry {
 	return r
 }
 
-// Get returns the provider with the given name.
 func (r *Registry) Get(name string) (Provider, bool) {
 	p, ok := r.byName[name]
 	return p, ok
 }
 
-// Names returns the registered provider names, sorted.
+// Names returns provider names in sorted order.
 func (r *Registry) Names() []string {
 	names := make([]string, 0, len(r.byName))
 	for n := range r.byName {
@@ -145,11 +131,11 @@ var foldLetters = strings.NewReplacer(
 	"&", " and ",
 )
 
-// NormalizeTitle makes titles comparable the way Sonarr/Radarr clean them:
-// lowercase, no diacritics or punctuation, "&" as "and", no leading "the".
+// NormalizeTitle matches Sonarr/Radarr title cleaning: lowercase, no diacritics
+// or punctuation, "&" becomes "and", and leading "the" is removed.
 func NormalizeTitle(s string) string {
 	s = foldLetters.Replace(s)
-	// Not safe for concurrent use, so built per call.
+	// Transformers are not safe for concurrent use.
 	stripMarks := transform.Chain(norm.NFD, runes.Remove(runes.In(unicode.Mn)), norm.NFC)
 	if folded, _, err := transform.String(stripMarks, s); err == nil {
 		s = folded

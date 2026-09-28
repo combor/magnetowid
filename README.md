@@ -1,7 +1,7 @@
 <h1 align="center">magnetowid</h1>
 
 <p align="center">
-  <strong>Bring VOD to your Sonarr and Radarr library.</strong>
+  <strong>VOD downloads for Sonarr and Radarr.</strong>
 </p>
 
 <p align="center">
@@ -18,12 +18,11 @@
   <a href="https://github.com/combor/magnetowid/issues">Report an issue</a>
 </p>
 
-Search and download movies and TV shows from video-on-demand services through
-your existing Sonarr or Radarr setup. magnetowid provides both a Newznab indexer
-and a SABnzbd-compatible download client, so you do not need a separate SABnzbd
-installation.
+magnetowid searches and downloads video-on-demand movies and series through
+Sonarr and Radarr. It provides a Newznab indexer and a SABnzbd-compatible
+download client. No separate SABnzbd installation is needed.
 
-Currently supported: **TVP VOD**. More providers are planned.
+Supported: **TVP VOD**.
 
 ## How it works
 
@@ -34,9 +33,6 @@ flowchart LR
     magnetowid -->|"MP4 files"| downloads["Shared download folder"]
     downloads -->|"Import into library"| arr
 ```
-
-Add magnetowid as an indexer to search a provider's catalogue and as a download client
-to fetch the video. Sonarr and Radarr track progress and import the finished files.
 
 ## Quick start
 
@@ -67,7 +63,7 @@ docker compose up -d
 ```
 
 Compose pulls `ghcr.io/combor/magnetowid:latest` and exposes the APIs on port **8484**.
-Continue below to connect your apps. For a native installation, see the
+For a native installation, see the
 [Linux service](docs/usage.md#linux-service) or
 [building from source](docs/usage.md#build-from-source).
 
@@ -82,8 +78,7 @@ In each app, add these two connections using the API key from `.env`:
    use `http://<magnetowid-host>:8484/tvp` with API path `/api`. Select
    categories `5000, 5040` in Sonarr or `2000, 2040` in Radarr. Set **Download
    Client** to the `magnetowid` client from step 1.
-3. Click **Test** on both connections, then **Save**. Search for a movie or show
-   from Sonarr or Radarr to get started.
+3. **Test** and **Save** both connections, then search from Sonarr or Radarr.
 
 Use a host address reachable from your apps, and make sure both can read the
 download folder. See [Docker networking and shared downloads](docs/usage.md#docker-networking-and-shared-downloads)
@@ -94,9 +89,8 @@ for container hostnames, volume mounts and Remote Path Mappings.
 - [Setup and configuration](docs/usage.md): installation options and settings.
 - [Troubleshooting](docs/usage.md#troubleshooting): help with connections and downloads.
 - [GitHub Issues](https://github.com/combor/magnetowid/issues): report a bug or suggest an improvement.
-- [Add a provider](docs/usage.md#adding-a-site) or follow the [development guide](docs/usage.md#development)
-  to contribute code. Documentation improvements are welcome too.
+- [Add a provider](docs/usage.md#adding-a-site) or use the [development guide](docs/usage.md#development).
 
 ## License
 
-magnetowid is available under the [BSD-3-Clause license](LICENSE).
+[BSD-3-Clause](LICENSE).

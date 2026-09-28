@@ -29,15 +29,10 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// The sites magnetowid reads, faked for TestSonarrAndRadarr: TVP's API,
-// Skyhook and Wikidata over HTTPS, reached through a proxy, and a stream
-// shaped like TVP's over HTTP. magnetowid uses them as it would the real
-// ones, and the proxy refuses any other site.
+// Fake TVP, Skyhook, and Wikidata behind an HTTPS proxy that rejects all other hosts.
 
-// fakedHosts are the sites the proxy passes on to the fakes.
 var fakedHosts = []string{"vod.tvp.pl", "skyhook.sonarr.tv", "www.wikidata.org"}
 
-// tvpProduct is a product as TVP's API gives it.
 type tvpProduct struct {
 	ID            int64  `json:"id"`
 	Type          string `json:"type"`
@@ -50,20 +45,16 @@ type tvpProduct struct {
 	Since         string `json:"since,omitempty"`
 }
 
-// TVP's catalogue: Czas honoru, which is TVDB's Days of Honor, with the
-// first three episodes of season 1, and the film Cube. The film Seksmisja
-// (Radarr's Sexmission) comes later, when the test releases it.
+// The catalogue starts with Czas honoru and Cube; Seksmisja is added during the test.
 const daysOfHonorTVDB = 83920
 
 var (
-	czasHonoru = tvpProduct{ID: 1001, Type: "SERIAL", Title: "Czas honoru", Year: 2008}
-	// season 1 of czasHonoru.
+	czasHonoru  = tvpProduct{ID: 1001, Type: "SERIAL", Title: "Czas honoru", Year: 2008}
 	czasHonoru1 = tvpProduct{ID: 1002, Type: "SEASON", Title: "Sezon 1", Number: 1}
 	cube        = tvpProduct{ID: 2001, Type: "VOD", Title: "Cube", OriginalTitle: "Cube", Year: 1997, Duration: 5195}
 	seksmisja   = tvpProduct{ID: 2002, Type: "VOD", Title: "Seksmisja", OriginalTitle: "Seksmisja", Year: 1984, Duration: 7020}
 )
 
-// czasHonoruEpisodes are season 1's episodes on TVP.
 func czasHonoruEpisodes() []tvpProduct {
 	var eps []tvpProduct
 	for n := 1; n <= 3; n++ {
@@ -73,11 +64,10 @@ func czasHonoruEpisodes() []tvpProduct {
 	return eps
 }
 
-// fakeSites serves the fakes.
 type fakeSites struct {
 	t           *testing.T
 	proxyURL    string // for HTTPS_PROXY
-	certFile    string // for SSL_CERT_FILE: the sites' certificate, which signs itself
+	certFile    string // self-signed certificate for SSL_CERT_FILE
 	streamURL   string // every item's
 	subtitleURL string // every item's, for the deaf and hard of hearing
 
@@ -85,7 +75,6 @@ type fakeSites struct {
 	films []tvpProduct
 }
 
-// startFakeSites starts the fakes, keeping the stream in dir.
 func startFakeSites(ctx context.Context, t *testing.T, dir string) *fakeSites {
 	t.Helper()
 	s := &fakeSites{t: t, films: []tvpProduct{cube}}
@@ -115,7 +104,6 @@ func startFakeSites(ctx context.Context, t *testing.T, dir string) *fakeSites {
 	return s
 }
 
-// release adds the film to TVP's catalogue.
 func (s *fakeSites) release(film tvpProduct) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -140,7 +128,6 @@ func (s *fakeSites) handler() http.Handler {
 		}
 		writeJSON(w, czasHonoruEpisodes())
 	})
-	// TVP's newest products, which the film feed reads.
 	mux.HandleFunc(tvp+"vods", func(w http.ResponseWriter, r *http.Request) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
@@ -176,8 +163,6 @@ func (s *fakeSites) handler() http.Handler {
 	return mux
 }
 
-// tvpSearch finds the products of the kind (SERIAL or VOD) whose title or
-// original title is the keyword.
 func (s *fakeSites) tvpSearch(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	products := append([]tvpProduct{czasHonoru}, s.films...)
@@ -193,7 +178,6 @@ func (s *fakeSites) tvpSearch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"items": items})
 }
 
-// known reports whether id is an episode or film on TVP.
 func (s *fakeSites) known(id string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -205,8 +189,7 @@ func (s *fakeSites) known(id string) bool {
 	return false
 }
 
-// skyhook gives Days of Honor's first three episodes. The third aired
-// yesterday, so the series feed offers it.
+// Episode 3 aired yesterday so it appears in RSS.
 func (s *fakeSites) skyhook(w http.ResponseWriter, r *http.Request) {
 	if r.PathValue("id") != strconv.Itoa(daysOfHonorTVDB) {
 		http.NotFound(w, r)
@@ -238,8 +221,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// serveProxy answers HTTPS_PROXY's CONNECT requests for the faked sites
-// with a tunnel to sites, and refuses any other.
+// Reject non-fixture hosts to prevent accidental requests to real sites.
 func (s *fakeSites) serveProxy(ln net.Listener, sites string) {
 	for {
 		c, err := ln.Accept()
@@ -277,8 +259,6 @@ func (s *fakeSites) tunnel(c net.Conn, sites string) {
 	io.Copy(c, up)
 }
 
-// selfSignedCert returns a certificate for hosts that signs itself, and
-// its PEM.
 func selfSignedCert(t *testing.T, hosts []string) (tls.Certificate, []byte) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -304,10 +284,8 @@ func selfSignedCert(t *testing.T, hosts []string) (tls.Certificate, []byte) {
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
 }
 
-// makeStream makes an 11-minute stream in dir shaped like TVP's: fMP4 HLS
-// with the audio apart, tagged Polish, and TTML subtitles. Sonarr and Radarr
-// take anything shorter than 10 minutes for a sample. The master playlist
-// gives TVP's bandwidth, so the release's size is a real one's.
+// Use 11 minutes: Sonarr/Radarr reject files under 10 minutes as samples.
+// Match TVP's HLS layout, audio language, subtitles, and advertised bandwidth.
 func makeStream(ctx context.Context, t *testing.T, dir string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

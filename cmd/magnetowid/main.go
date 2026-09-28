@@ -1,5 +1,4 @@
-// Command magnetowid serves VOD sites to Sonarr and Radarr as Newznab indexers
-// and a SABnzbd download client.
+// Command magnetowid provides Newznab and SABnzbd APIs for VOD downloads.
 package main
 
 import (
@@ -29,7 +28,7 @@ import (
 	"github.com/combor/magnetowid/internal/store"
 )
 
-// version is overridden at build time via -ldflags "-X main.version=...".
+// Set at build time with -ldflags "-X main.version=...".
 var version = "dev"
 
 func main() {
@@ -79,14 +78,13 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 		return fmt.Errorf("ffmpeg not found: %w", err)
 	}
 
-	// Closed last, after the server and the worker have stopped writing.
+	// Close after the server and worker stop writing.
 	db, err := store.Open(dir)
 	if err != nil {
 		return err
 	}
 	defer db.Close()
 
-	// Add new sites here.
 	httpClient := &http.Client{Timeout: 30 * time.Second}
 	tvpProvider, err := tvp.New(httpClient, log, db)
 	if err != nil {
@@ -104,7 +102,6 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 	prober := &probe.Prober{Client: httpClient}
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Probe: prober, Log: log})
 	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})
-	// For health checks, so it needs no API key.
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "OK\n") })
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -145,8 +142,7 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 	return serveErr
 }
 
-// logRequests logs requests without the query string, which holds the API
-// key, and without health checks, which would drown the others.
+// Omit query strings to keep API keys out of logs, and health checks to reduce noise.
 func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/health" {
@@ -157,14 +153,12 @@ func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 	})
 }
 
-// checkHealth asks the magnetowid listening on listen whether it is healthy,
-// for the container's health check.
 func checkHealth(listen string) error {
 	u, err := healthURL(listen)
 	if err != nil {
 		return err
 	}
-	// Straight to magnetowid, not through a proxy set for the sites.
+	// Bypass proxies configured for VOD sites.
 	client := &http.Client{Timeout: 5 * time.Second, Transport: &http.Transport{Proxy: nil}}
 	resp, err := client.Get(u)
 	if err != nil {
@@ -177,8 +171,7 @@ func checkHealth(listen string) error {
 	return nil
 }
 
-// healthURL is the health endpoint of the magnetowid listening on listen,
-// over loopback if it listens on every address.
+// Use loopback when listening on all addresses.
 func healthURL(listen string) (string, error) {
 	host, port, err := net.SplitHostPort(listen)
 	if err != nil {

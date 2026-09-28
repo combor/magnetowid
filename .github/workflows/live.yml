@@ -1,8 +1,6 @@
 name: Live Sites
 
-# TVP's API is unofficial, and Skyhook and Wikidata can change too. This
-# checks every day that they still give what magnetowid reads, so a change
-# shows up here before users report it.
+# Detect API changes that fixtures cannot catch.
 on:
   schedule:
     - cron: '23 5 * * *'

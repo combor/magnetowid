@@ -1,10 +1,9 @@
 # Setup and configuration
 
-Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
-magnetowid needs no changes to either app: it looks like two things they already support.
+magnetowid exposes two APIs for Sonarr and Radarr:
 
-- **A Newznab indexer per site** at `/{provider}/api`, so they can search the site's catalogue.
-- **A SABnzbd download client** at `/api`, so they can send downloads, follow progress and import the finished MP4.
+- **Newznab** at `/{provider}/api` for catalogue searches.
+- **SABnzbd** at `/api` for downloads, progress, and completed MP4 files.
 
 Supported sites: **TVP VOD** (`tvp`). See the [TVP VOD notes](../internal/provider/tvp/README.md).
 
@@ -26,14 +25,12 @@ The Compose example reads these settings from `.env`:
 | `MAGNETOWID_UID` | `1000` | User ID for the container process. |
 | `MAGNETOWID_GID` | `1000` | Group ID for the container process. |
 
-Create the download folder before starting. On Linux, use the user and group IDs
-of the account that owns it; `id -u` and `id -g` show your current account's IDs.
-The container needs permission to create files and category folders there.
-Sonarr/Radarr also need access to the same files. See
+Create the download folder before starting. On Linux, use its owner's user
+and group IDs; `id -u` and `id -g` show your current account's IDs. Give
+magnetowid and Sonarr/Radarr write access to the shared folder. See
 [Docker networking and shared downloads](#docker-networking-and-shared-downloads).
 
-Start magnetowid with `docker compose up -d`. After changing `.env`, run the
-same command to apply the new settings. To update to the latest image:
+Run `docker compose up -d` to start or apply `.env` changes. To update:
 
 ```sh
 docker compose pull
@@ -51,11 +48,10 @@ magnetowid as a systemd service. Set `MAGNETOWID_API_KEY` in
 sudo systemctl enable --now magnetowid
 ```
 
-The service runs as the `magnetowid` user in the `media` group, which the Arch
-Sonarr and Radarr packages also use, so they can import its downloads.
-Downloads go to `/var/lib/magnetowid/downloads` unless you set
-`MAGNETOWID_DOWNLOAD_DIR`. Another folder must be writable by the `media` group
-and can't be under `/home`.
+The service runs as `magnetowid:media`, matching the group used by Arch's
+Sonarr and Radarr packages. Downloads default to `/var/lib/magnetowid/downloads`.
+An alternative `MAGNETOWID_DOWNLOAD_DIR` must be writable by `media` and outside
+`/home`.
 
 If Sonarr/Radarr share a different group, run `sudo systemctl edit magnetowid`
 and add:
@@ -69,7 +65,7 @@ Run `sudo systemctl restart magnetowid` after changing settings.
 
 ### Build from source
 
-To build from source, use Go 1.27+ and install `ffmpeg` for runtime use.
+Requires Go 1.27.1+ and ffmpeg.
 
 ```sh
 git clone https://github.com/combor/magnetowid.git
@@ -92,74 +88,62 @@ section in `compose.yaml`. For the Linux service, set them in
 |---|---|---|---|
 | `-listen` | `MAGNETOWID_LISTEN` | `:8484` | listen address |
 | `-api-key` | `MAGNETOWID_API_KEY` | | required; used by both APIs |
-| `-download-dir` | `MAGNETOWID_DOWNLOAD_DIR` | | required; finished files go to `<dir>/<category>/<release>/`, and the database of jobs and of the series and films watched for new releases to `<dir>/.magnetowid-jobs.db` |
+| `-download-dir` | `MAGNETOWID_DOWNLOAD_DIR` | | required; downloads go to `<dir>/<category>/<release>/`; state is stored in `<dir>/.magnetowid-jobs.db` |
 | `-categories` | `MAGNETOWID_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `MAGNETOWID_FFMPEG` | `ffmpeg` | ffmpeg binary |
-| `-log-level` | `MAGNETOWID_LOG_LEVEL` | `info` | `debug` also logs each request, RSS sync and rebuild of a site's feeds; `warn` and `error` log less |
+| `-log-level` | `MAGNETOWID_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`; debug includes requests and RSS activity |
 
-`GET /health` answers `OK` while magnetowid runs, without an API key, for
-monitoring. The container's health check uses it: `magnetowid -healthcheck`
-asks the magnetowid at `MAGNETOWID_LISTEN` and exits with 0 if it answers, and
-`docker ps` shows the result. It can't see command-line flags, so in a container
-set the listen address with `MAGNETOWID_LISTEN`, not `-listen`.
+`GET /health` returns `OK` without an API key. The container health check runs
+`magnetowid -healthcheck`, which queries `MAGNETOWID_LISTEN` and exits with 0
+on success. Set a container's listen address through `MAGNETOWID_LISTEN`:
+the health check cannot read the server's command-line flags.
 
 Sonarr/Radarr must be able to read the download directory. If they see it at a different path (e.g. in containers), add a Remote Path Mapping.
 
 ## Sonarr / Radarr setup
 
 1. **Download client:** Settings → Download Clients → **SABnzbd**.
-   - Name: e.g. "VOD Downloader".
+   - Name: `magnetowid`.
    - Host and port: magnetowid's host and port.
    - API key: the one magnetowid was started with.
    - Category: `tv` (Sonarr) or `movies` (Radarr).
-   - Priority settings (optional): magnetowid downloads one job at a time and starts higher-priority jobs first. Paused adds the job paused: see [Pausing downloads](#pausing-downloads).
+   - Priority: higher-priority jobs run first, one at a time. **Paused** queues the job without starting it. See [Pausing downloads](#pausing-downloads).
 2. **Indexer:** Settings → Indexers → **Newznab**, one per site.
    - Name: e.g. "TVP VOD".
    - URL: `http://<host>:8484/tvp`, API path `/api`, the same API key.
    - Categories: 5000, 5040 (Sonarr) or 2000, 2040 (Radarr).
-   - **Download Client:** set it to the client from step 1, so magnetowid releases never go to a real Usenet client.
-3. **Language (Radarr):** Radarr's quality profiles want a film's original language
-   by default, and turn down releases in another. A release's name gives the
-   language of its audio, which on TVP is Polish, voice-over included, so Radarr
-   turns down foreign films from TVP. In the quality profile Radarr uses
-   (Settings → Profiles), set **Language** to **Any**, or to **Polish** for films
-   in Polish only. Sonarr's profiles have no language.
+   - **Download Client:** select `magnetowid` to route its releases correctly.
+3. **Language (Radarr):** under Settings → Profiles, set **Language** to **Any**,
+   or **Polish** for Polish audio only. The default, original language, rejects
+   foreign films with TVP's Polish audio. Sonarr profiles have no language setting.
 
-The test buttons should pass for both. When a site has nothing new to offer,
-its feed holds a placeholder item, which is never grabbed, because the indexer
-test fails on an empty feed.
+Test both connections. An empty feed produces a placeholder to pass the
+indexer test; it cannot be downloaded.
 
 ### New episodes and films (RSS)
 
-Sonarr and Radarr find new releases through RSS sync, every 15 minutes by
-default. magnetowid's feeds offer the new episodes of the series it watches, and
-the films it watches for once the site has them:
+For sites with RSS support, magnetowid watches titles after Sonarr or Radarr
+searches for them. RSS sync, every 15 minutes by default, finds new episodes
+and newly available films.
 
-- magnetowid starts watching a series the first time Sonarr searches for it, for
-  example when the series is added with a search for missing episodes.
-- It watches for a film the first time Radarr searches for it, for example
-  when the film is added with a search for it.
-- After upgrading, search once for what is already wanted: **Search
-  Monitored** on each series page in Sonarr, and **Search All** under
-  **Wanted → Missing** in Radarr.
-- The feed covers episodes that aired in the last 14 days, and films while
-  they are among the site's newest. Older ones need a search.
-- It's for sites whose notes say they support it.
+- Add new titles with a search enabled.
+- For existing wanted titles, use **Search Monitored** on each Sonarr series
+  page, and **Wanted → Missing → Search All** in Radarr.
+- Feeds cover episodes aired within 14 days and films among the site's newest.
+  Search manually for older releases. See each site's notes for support and limits.
 
 ### Subtitles
 
-magnetowid saves the subtitles a site offers next to the video as SRT files,
-named after it with the language and `sdh` for the deaf and hard of hearing,
-e.g. `<release>.pol.sdh.srt`. Sonarr and Radarr import them only if you turn on
-**Import Extra Files** under Settings → Media Management (with **Show
-Advanced**), with `srt` among its extensions, which is the default. A download
-whose subtitles can't be fetched keeps the video, with a warning in the log.
+Subtitles are saved beside the video as SRT, with language and `sdh` labels
+(subtitles for the deaf and hard of hearing), e.g. `<release>.pol.sdh.srt`.
+To import them, enable **Import Extra Files** under **Settings → Media Management
+→ Show Advanced** in both apps, with `srt` among the extensions (included by
+default). Subtitle failures log a warning and keep the video.
 
 ### Pausing downloads
 
-magnetowid takes SABnzbd's pause and resume commands, for the whole queue or
-single jobs. Sonarr and Radarr show paused jobs, but can't pause or resume
-them, so send the commands yourself, e.g. with curl:
+Use SABnzbd API commands to pause or resume the queue or individual jobs.
+Sonarr and Radarr display paused jobs but cannot control pausing:
 
 ```sh
 curl 'http://localhost:8484/api?mode=pause&apikey=YOUR_API_KEY'
@@ -167,10 +151,9 @@ curl 'http://localhost:8484/api?mode=resume&apikey=YOUR_API_KEY'
 curl 'http://localhost:8484/api?mode=queue&name=resume&value=JOB_ID&apikey=YOUR_API_KEY'
 ```
 
-`mode=queue&apikey=YOUR_API_KEY` lists the jobs with their IDs (`nzo_id`);
-`name=pause` pauses the jobs in `value`, separated by commas. A download that
-is running when paused starts again from the beginning once resumed. Pauses
-survive restarts.
+`mode=queue&apikey=YOUR_API_KEY` lists job IDs (`nzo_id`). Use `name=pause`
+and comma-separated IDs in `value` to pause jobs. Pauses survive restarts;
+interrupted downloads restart from the beginning when resumed.
 
 ## Docker networking and shared downloads
 
@@ -210,7 +193,7 @@ and manage downloads in Sonarr/Radarr.
 | The container cannot find or write to the download folder | Create `MAGNETOWID_DOWNLOAD_PATH` before starting and check that `MAGNETOWID_UID` and `MAGNETOWID_GID` have write access. |
 | Downloads finish but are not imported | Mount the shared folder into Sonarr/Radarr, check file permissions and add a Remote Path Mapping if the paths differ. |
 | A magnetowid release is sent to another download client | Set the indexer's **Download Client** to `magnetowid`. |
-| Downloads stay queued and the log says `provider unreachable` | magnetowid can't reach the site, for example because the network, DNS or VPN is down. Jobs wait and resume on their own once the site is reachable; they don't fail. |
+| Downloads stay queued with `provider unreachable` in the log | Check the network, DNS, and VPN. Jobs resume automatically when the site becomes reachable, without consuming retries. |
 
 To inspect recent container messages:
 
@@ -218,28 +201,28 @@ To inspect recent container messages:
 docker compose logs --tail 100 magnetowid
 ```
 
-For the Linux service, use `journalctl -u magnetowid -n 100`. To see each
-request from Sonarr/Radarr and what each RSS sync offered, set
-`MAGNETOWID_LOG_LEVEL=debug`.
+For the Linux service, use `journalctl -u magnetowid -n 100`.
+Set `MAGNETOWID_LOG_LEVEL=debug` for request and RSS details.
 
 For bugs or feature requests, [open an issue](https://github.com/combor/magnetowid/issues).
 Include the steps to reproduce and any relevant error message, with API keys removed.
 
 ## Limitations
 
-- **Titles:** magnetowid searches the site with the title Sonarr/Radarr send.
-  - Radarr also searches with a film's original title, so non-English films are found.
-  - Sonarr only sends its own series title, which is often English. A series is
-    found only if that title matches the site's, unless the site can also be
-    searched by TVDB ID. The notes for each site say whether it can.
-- **Episode numbers:** a series whose seasons or episode numbers on the site
-  differ from TVDB's isn't found, by search or by RSS, unless the site's notes
-  say how it is. TVP's long soaps are found this way.
-- **What can't be downloaded:** DRM-protected and paid content, and titles not available where magnetowid runs. magnetowid leaves them out of search results, and logs how many it left out with the site's reason for the first. A job can still fail if a title stops being available between the search and the download. Getting network access to region-restricted titles is up to the operator.
-- **Release details:**
-  - A release's name gives the resolution and codecs of the best stream the site offers, which is the one magnetowid downloads, and the language of its audio if the stream gives it. magnetowid reads them from the stream when searching: this costs two requests to the site per result, and is remembered for a day. A result whose stream can't be read is left out, with a warning in the log.
-  - Only a single audio track is kept. The site's [subtitles](#subtitles) are saved as SRT; only TTML is converted so far.
-- **Restarts:** the queue, the history, and the series and films watched for new releases are saved in `.magnetowid-jobs.db` in the download folder and survive restarts. Finished jobs stay in the history for 30 days. A download that was running starts again from the beginning. The folder must be on a filesystem that supports file locks, and only one magnetowid can use it at a time.
+- **Titles:** Radarr searches local and original film titles. Sonarr sends its
+  series title, often English; a different site title requires TVDB ID support.
+  See each site's notes.
+- **Episode numbers:** differences from TVDB require provider-specific mapping.
+  This applies to both search and RSS; TVP's soap mapping has its own limits.
+- **Availability:** DRM, paid, region-blocked, and unreadable streams are omitted
+  from results. Availability can still change between search and download.
+- **Streams:** release names use the selected stream's resolution, codecs, and
+  known audio language. Probes run during search and are cached for a day.
+  Downloads keep one audio track; subtitle conversion supports TTML only.
+- **Restarts:** `.magnetowid-jobs.db` stores the queue, history, and watch lists.
+  Completed history expires after 30 days. Interrupted downloads restart from
+  the beginning. The download filesystem must support file locks; only one
+  magnetowid instance can use it at a time.
 
 ## Adding a site
 
@@ -253,22 +236,15 @@ Implement `provider.Provider` (`internal/provider/provider.go`) in a new package
   sync;
 - documents the site's own behaviour and limits in a `README.md` in its package.
 
-Everything else is shared.
-
 ## Development
 
-`make test` runs formatting checks, vet, and race tests. Install ffmpeg with the
-libx264 encoder to run the download-engine tests. `make docker-smoke` builds the
-container and checks startup and both APIs. `make package-smoke` builds the
-Linux packages with GoReleaser and checks that each installs, runs and uninstalls
-as a systemd service in Debian, Fedora and Arch containers.
-
-`make integration` runs magnetowid with Sonarr and Radarr in containers, and
-fakes of the sites it reads, and checks that they grab and import what they find
-by search and by RSS sync. It needs Linux, Docker and ffmpeg with libx264; the
-apps look series and films up on their own servers. `make live` checks the real
-TVP API, Skyhook and Wikidata for what magnetowid reads from them; CI runs it
-daily.
+| Command | Checks | Requirements |
+|---|---|---|
+| `make test` | Formatting, vet, race tests | ffmpeg with libx264 for download tests |
+| `make docker-smoke` | Image build, startup, both APIs | Docker |
+| `make package-smoke` | Install, run, upgrade, and remove packages on Debian, Fedora, and Arch | Docker, GoReleaser |
+| `make integration` | Sonarr/Radarr search, RSS grabs, video and subtitle imports against fake VOD sites | Linux, Docker, ffmpeg with libx264, access to the apps' metadata servers |
+| `make live` | Live TVP, Skyhook, and Wikidata APIs; also runs daily in CI | Network access |
 
 ## License
 

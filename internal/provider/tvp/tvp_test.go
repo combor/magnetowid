@@ -101,8 +101,7 @@ func newProvider(t *testing.T) *Provider {
 	return newProviderWith(t, nil)
 }
 
-// newProviderWith is newProvider whose TVP answers with serve's body when it
-// has one for the path and query, and fails with HTTP 500 if that is "500".
+// serve overrides fixtures by path and query; a body of "500" produces HTTP 500.
 func newProviderWith(t *testing.T, serve func(key string) (string, bool)) *Provider {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +180,6 @@ func TestWholeSeasonSkipsPaidAndSpecials(t *testing.T) {
 	}
 }
 
-// Gaps, duplicates and unknown starts never shift episode numbers.
 func TestEpisodeNumbering(t *testing.T) {
 	p := newProvider(t)
 	tests := []struct {

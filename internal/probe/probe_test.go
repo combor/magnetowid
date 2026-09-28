@@ -83,8 +83,6 @@ const master = `#EXTM3U
 1080.m3u8
 `
 
-// fakeProvider resolves each ID to "<server>/<id>.m3u8", except IDs in
-// unavailable. It counts resolves.
 type fakeProvider struct {
 	base        string
 	unavailable map[string]bool
@@ -114,9 +112,6 @@ func (f *fakeProvider) count() int {
 	return f.resolves
 }
 
-// newFixture serves master at /ok.m3u8, one without a resolution at
-// /noresolution.m3u8, and master at /flaky.m3u8 after refusing it flaky
-// times. /stall.m3u8 never answers, and anything else is refused.
 func newFixture(t *testing.T, flaky int) (*Prober, *fakeProvider) {
 	t.Helper()
 	var mu sync.Mutex
@@ -166,7 +161,6 @@ func TestProbe(t *testing.T) {
 	}
 }
 
-// TVP's CDN refuses some edges; a fresh Resolve gets another.
 func TestProbeRetries(t *testing.T) {
 	pr, p := newFixture(t, 2)
 	if got, err := pr.Probe(context.Background(), p, "flaky.m3u8"); err != nil || got.Height != 1080 {
@@ -177,8 +171,7 @@ func TestProbeRetries(t *testing.T) {
 	}
 }
 
-// A stream that can't be read is remembered only while Sonarr pages through
-// one search, and not at all if the caller gave up.
+// Keep failures stable within one search; do not cache caller cancellation.
 func TestProbeFailureIsCachedBriefly(t *testing.T) {
 	pr, p := newFixture(t, 0)
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
@@ -207,8 +200,7 @@ func TestProbeFailureIsCachedBriefly(t *testing.T) {
 	}
 }
 
-// A stalled stream fails after Prober.Timeout, and that failure is the
-// stream's, so it is remembered like any other.
+// A probe timeout is cacheable; caller cancellation is not.
 func TestProbeStallTimesOut(t *testing.T) {
 	pr, p := newFixture(t, 0)
 	pr.Timeout = 100 * time.Millisecond
@@ -225,8 +217,6 @@ func TestProbeStallTimesOut(t *testing.T) {
 	}
 }
 
-// A probe that fails after a concurrent one of the same item succeeded
-// returns, and keeps, the success.
 func TestStoreKeepsSuccess(t *testing.T) {
 	var pr Prober
 	now := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
@@ -239,7 +229,6 @@ func TestStoreKeepsSuccess(t *testing.T) {
 	if got := pr.cache["fake:1"]; got != ok {
 		t.Errorf("cached %+v, want the success", got)
 	}
-	// A success does replace a failure.
 	pr.store("fake:2", failed, now)
 	if got := pr.store("fake:2", ok, now); got != ok {
 		t.Errorf("store over a failure returned %+v", got)

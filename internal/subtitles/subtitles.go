@@ -1,5 +1,4 @@
-// Package subtitles fetches a site's subtitles and converts them to SRT,
-// which media servers and Sonarr/Radarr read next to a video.
+// Package subtitles fetches TTML subtitles and converts them to SRT.
 package subtitles
 
 import (
@@ -20,14 +19,11 @@ import (
 	"github.com/combor/magnetowid/internal/provider"
 )
 
-// maxSize caps a subtitle file; a film's TTML is about 100 KB.
+// A film's TTML is about 100 KB.
 const maxSize = 10 << 20
 
-// ErrNoCues means the subtitles hold no text to show.
 var ErrNoCues = errors.New("no subtitles in the file")
 
-// Fetch gets the subtitles, with the stream's headers, and converts them to
-// SRT.
 func Fetch(ctx context.Context, client *http.Client, s provider.Subtitle, header http.Header) ([]byte, error) {
 	if s.Format != provider.TTML {
 		return nil, fmt.Errorf("subtitles in %q can't be converted", s.Format)
@@ -59,19 +55,16 @@ func Fetch(ctx context.Context, client *http.Client, s provider.Subtitle, header
 	return TTMLToSRT(body)
 }
 
-// cue is a subtitle shown from begin to end.
 type cue struct {
 	begin, end time.Duration
 	text       string
 }
 
-// style is what the SRT keeps of a TTML style: colour, italics and bold.
-// Empty fields are inherited.
+// Empty style fields inherit from the parent.
 type style struct {
 	color, fontStyle, fontWeight string
 }
 
-// over returns s with the fields o sets.
 func (s style) over(o style) style {
 	return style{cmp.Or(o.color, s.color), cmp.Or(o.fontStyle, s.fontStyle), cmp.Or(o.fontWeight, s.fontWeight)}
 }
@@ -79,7 +72,6 @@ func (s style) over(o style) style {
 func (s style) italic() bool { return s.fontStyle == "italic" || s.fontStyle == "oblique" }
 func (s style) bold() bool   { return s.fontWeight == "bold" }
 
-// element is an open element of the TTML's body.
 type element struct {
 	name       string
 	begin, end time.Duration // on the media's timeline; end is -1 if open
@@ -87,8 +79,7 @@ type element struct {
 	closeTags  string // SRT tags that close the element's formatting
 }
 
-// TTMLToSRT converts TTML (W3C Timed Text, DFXP) to SRT. Line breaks,
-// colours, italics and bold are kept; layout isn't, as SRT has none.
+// TTMLToSRT preserves line breaks, colours, italics, and bold. SRT cannot preserve layout.
 func TTMLToSRT(ttml []byte) ([]byte, error) {
 	d := xml.NewDecoder(bytes.NewReader(ttml))
 	styles := map[string]style{}
@@ -180,8 +171,7 @@ func TTMLToSRT(ttml []byte) ([]byte, error) {
 	return []byte(b.String()), nil
 }
 
-// timed returns e with its interval, from its begin, end and dur relative
-// to its parent's begin. Without them, it has its parent's.
+// TTML intervals are relative to the parent's begin; missing values inherit.
 func timed(e, parent element, attrs []xml.Attr, c clock) element {
 	e.begin, e.end = parent.begin, parent.end
 	if v, ok := c.parse(attr(attrs, "begin")); ok {
@@ -198,8 +188,7 @@ func timed(e, parent element, attrs []xml.Attr, c clock) element {
 	return e
 }
 
-// ownStyle is the style an element sets: the styles it refers to, then its
-// own attributes.
+// Local attributes override referenced styles.
 func ownStyle(attrs []xml.Attr, styles map[string]style) style {
 	var s style
 	for _, id := range strings.Fields(attr(attrs, "style")) {
@@ -208,8 +197,7 @@ func ownStyle(attrs []xml.Attr, styles map[string]style) style {
 	return s.over(style{attr(attrs, "color"), attr(attrs, "fontStyle"), attr(attrs, "fontWeight")})
 }
 
-// openTags writes the SRT tags that give inner the formatting outer lacks,
-// and returns the tags that close them. Text is white unless coloured.
+// Emit only formatting changes. Unstyled text defaults to white.
 func openTags(b *strings.Builder, outer, inner style) (closeTags string) {
 	if c := srtColor(inner.color); c != "" && c != cmp.Or(srtColor(outer.color), "#ffffff") {
 		fmt.Fprintf(b, `<font color="%s">`, c)
@@ -226,8 +214,7 @@ func openTags(b *strings.Builder, outer, inner style) (closeTags string) {
 	return closeTags
 }
 
-// srtColor is a TTML colour as SRT gives it: a name, or #RRGGBB. White,
-// the default, is always #ffffff, so it compares equal however it's given.
+// Normalize colours to names or #RRGGBB, with white always #ffffff for comparison.
 func srtColor(c string) string {
 	c = strings.ToLower(strings.TrimSpace(c))
 	if c == "white" {
@@ -255,8 +242,7 @@ func srtColor(c string) string {
 	return c
 }
 
-// tidy collapses the whitespace of each line, as TTML's default xml:space
-// does, and drops empty lines. Lines end at <br/>.
+// Apply TTML's default whitespace rules; only <br/> starts a new line.
 func tidy(s string) string {
 	var lines []string
 	for _, line := range strings.Split(s, "\n") {
@@ -281,7 +267,6 @@ func srtTime(d time.Duration) string {
 	return fmt.Sprintf("%02d:%02d:%02d,%03d", ms/3_600_000, ms/60_000%60, ms/1000%60, ms%1000)
 }
 
-// clock reads TTML time expressions, which may count frames and ticks.
 type clock struct {
 	frameRate, subFrameRate, tickRate float64
 }
@@ -318,7 +303,6 @@ var (
 	offsetTime = regexp.MustCompile(`^(\d+(?:\.\d+)?)(h|m|s|ms|f|t)$`)
 )
 
-// parse reads a time expression; ok is false if there is none.
 func (c clock) parse(s string) (d time.Duration, ok bool) {
 	s = strings.TrimSpace(s)
 	seconds := func(f float64) time.Duration { return time.Duration(f * float64(time.Second)) }

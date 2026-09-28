@@ -1,6 +1,5 @@
 #!/bin/sh
-# deb and rpm preremove: stop and disable the service on removal, not upgrade.
-# A deb removal passes "remove", an rpm removal a count of 0.
+# Removal passes "remove" for deb, 0 for rpm. Leave upgrades running.
 set -e
 
 case "$1" in

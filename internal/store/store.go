@@ -1,6 +1,5 @@
-// Package store opens magnetowid's database. The downloader and the providers
-// share one handle, as bbolt allows only one per file; each keeps its data in
-// a bucket of its own.
+// Package store shares one bbolt handle across the downloader and providers.
+// Each owns a bucket; bbolt allows only one handle per file.
 package store
 
 import (
@@ -14,12 +13,9 @@ import (
 	bolterrors "go.etcd.io/bbolt/errors"
 )
 
-// File is the database in the download folder. It is named after the jobs,
-// which it held alone at first.
 const File = ".magnetowid-jobs.db"
 
-// Version is the database format. Open refuses a newer one, which this
-// magnetowid might misread.
+// Open rejects database versions newer than Version.
 const Version = 1
 
 var (
@@ -27,10 +23,9 @@ var (
 	versionKey = []byte("version")
 )
 
-// Open opens the database in dir, creating it if needed.
 func Open(dir string) (*bolt.DB, error) {
 	path := filepath.Join(dir, File)
-	// Without a timeout, Open waits forever for another process's lock.
+	// Bound the wait for another process's file lock.
 	db, err := bolt.Open(path, 0o666, &bolt.Options{Timeout: time.Second})
 	if errors.Is(err, bolterrors.ErrTimeout) {
 		return nil, fmt.Errorf("%s is in use by another magnetowid", path)
@@ -45,7 +40,7 @@ func Open(dir string) (*bolt.DB, error) {
 	return db, nil
 }
 
-// checkVersion records Version in a database from before versioning.
+// Initialize databases created before format versioning.
 func checkVersion(tx *bolt.Tx) error {
 	b, err := tx.CreateBucketIfNotExists(metaBucket)
 	if err != nil {
