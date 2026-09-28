@@ -75,10 +75,11 @@ func czasHonoruEpisodes() []tvpProduct {
 
 // fakeSites serves the fakes.
 type fakeSites struct {
-	t         *testing.T
-	proxyURL  string // for HTTPS_PROXY
-	certFile  string // for SSL_CERT_FILE: the sites' certificate, which signs itself
-	streamURL string // every item's
+	t           *testing.T
+	proxyURL    string // for HTTPS_PROXY
+	certFile    string // for SSL_CERT_FILE: the sites' certificate, which signs itself
+	streamURL   string // every item's
+	subtitleURL string // every item's, for the deaf and hard of hearing
 
 	mu    sync.Mutex
 	films []tvpProduct
@@ -92,6 +93,7 @@ func startFakeSites(ctx context.Context, t *testing.T, dir string) *fakeSites {
 	streams := httptest.NewServer(http.FileServer(http.Dir(makeStream(ctx, t, filepath.Join(dir, "stream")))))
 	t.Cleanup(streams.Close)
 	s.streamURL = streams.URL + "/master.m3u8"
+	s.subtitleURL = streams.URL + "/subtitles.xml"
 
 	cert, certPEM := selfSignedCert(t, fakedHosts)
 	s.certFile = filepath.Join(dir, "sites.pem")
@@ -151,7 +153,11 @@ func (s *fakeSites) handler() http.Handler {
 			tvpNotFound(w)
 			return
 		}
-		writeJSON(w, map[string]any{"sources": map[string]any{"HLS": []any{map[string]string{"src": s.streamURL}}}, "drm": nil})
+		writeJSON(w, map[string]any{
+			"sources":   map[string]any{"HLS": []any{map[string]string{"src": s.streamURL}}},
+			"drm":       nil,
+			"subtitles": []any{map[string]string{"url": s.subtitleURL, "language": "POLISH_DLA_NIESLYSZACYCH", "isoCode": "POL"}},
+		})
 	})
 	mux.HandleFunc("GET skyhook.sonarr.tv/v1/tvdb/shows/en/{id}", s.skyhook)
 	mux.HandleFunc("GET www.wikidata.org/w/api.php", func(w http.ResponseWriter, r *http.Request) {
@@ -299,9 +305,9 @@ func selfSignedCert(t *testing.T, hosts []string) (tls.Certificate, []byte) {
 }
 
 // makeStream makes an 11-minute stream in dir shaped like TVP's: fMP4 HLS
-// with the audio apart, tagged Polish. Sonarr and Radarr take anything
-// shorter than 10 minutes for a sample. The master playlist gives TVP's
-// bandwidth, so the release's size is a real one's.
+// with the audio apart, tagged Polish, and TTML subtitles. Sonarr and Radarr
+// take anything shorter than 10 minutes for a sample. The master playlist
+// gives TVP's bandwidth, so the release's size is a real one's.
 func makeStream(ctx context.Context, t *testing.T, dir string) string {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -326,6 +332,19 @@ func makeStream(ctx context.Context, t *testing.T, dir string) string {
 media_0.m3u8
 `, 5118260)
 	if err := os.WriteFile(filepath.Join(dir, "master.m3u8"), []byte(master), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	subtitles := `<?xml version="1.0" encoding="UTF-8"?>
+<tt xml:lang="pl-PL" xmlns="http://www.w3.org/ns/ttml" xmlns:tts="http://www.w3.org/ns/ttml#styling" xmlns:ttp="http://www.w3.org/ns/ttml#parameter" ttp:frameRate="25">
+  <body>
+    <div>
+      <p begin="00:00:01.000" end="00:00:03.000">Usta, cięcie!</p>
+      <p begin="00:00:04.000" end="00:00:06.000"><span tts:color="#16F158">Imion nie zmieniono.</span></p>
+    </div>
+  </body>
+</tt>
+`
+	if err := os.WriteFile(filepath.Join(dir, "subtitles.xml"), []byte(subtitles), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return dir

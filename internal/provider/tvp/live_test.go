@@ -1,6 +1,7 @@
 package tvp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/combor/magnetowid/internal/hls"
 	"github.com/combor/magnetowid/internal/provider"
+	"github.com/combor/magnetowid/internal/subtitles"
 )
 
 // TestLive checks the real TVP API, Skyhook and Wikidata for what magnetowid
@@ -50,7 +52,21 @@ func TestLive(t *testing.T) {
 		if err != nil || title != "Days of Honor" || len(items) != 1 || items[0].Duration < 40*time.Minute {
 			t.Fatalf("SearchTVDB = %q, %+v, %v", title, items, err)
 		}
-		checkStream(ctx, t, p, client, items[0].ID)
+		stream, ok := checkStream(ctx, t, p, client, items[0].ID)
+		if !ok {
+			return
+		}
+		// TVP's own series have subtitles for the deaf and hard of hearing.
+		i := slices.IndexFunc(stream.Subtitles, func(sub provider.Subtitle) bool { return sub.Language == "pol" && sub.SDH })
+		if i < 0 {
+			t.Fatalf("subtitles %+v, want Polish ones for the deaf and hard of hearing", stream.Subtitles)
+		}
+		srt, err := subtitles.Fetch(ctx, client, stream.Subtitles[i], stream.Header)
+		if n := bytes.Count(srt, []byte(" --> ")); err != nil || n < 100 {
+			t.Errorf("subtitles: %d cues, %v", n, err)
+		} else {
+			t.Logf("subtitles: %d cues", n)
+		}
 	})
 
 	t.Run("newest films", func(t *testing.T) {
@@ -109,13 +125,14 @@ func TestLive(t *testing.T) {
 }
 
 // checkStream checks that the item resolves to an HLS stream whose audio
-// has a language, or is refused for being outside Poland.
-func checkStream(ctx context.Context, t *testing.T, p *Provider, client *http.Client, id string) {
+// has a language, and returns it, or that it is refused for being outside
+// Poland.
+func checkStream(ctx context.Context, t *testing.T, p *Provider, client *http.Client, id string) (provider.Stream, bool) {
 	t.Helper()
 	s, err := p.Resolve(ctx, id)
 	if errors.Is(err, provider.ErrUnavailable) && strings.Contains(err.Error(), "GEOIP_FILTER_FAILED") {
 		t.Logf("item %s is refused outside Poland, as expected there", id)
-		return
+		return provider.Stream{}, false
 	}
 	if err != nil {
 		t.Fatalf("item %s: %v", id, err)
@@ -128,4 +145,5 @@ func checkStream(ctx context.Context, t *testing.T, p *Provider, client *http.Cl
 		t.Errorf("item %s: best variant %+v, audio language %q", id, m.Video, m.AudioLanguage)
 	}
 	t.Logf("item %s: %dx%d, %s, audio in %q", id, m.Video.Width, m.Video.Height, m.Video.Codecs, m.AudioLanguage)
+	return s, true
 }

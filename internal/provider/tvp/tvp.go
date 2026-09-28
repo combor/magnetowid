@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -436,7 +437,8 @@ func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, err
 		Sources map[string][]struct {
 			Src string `json:"src"`
 		} `json:"sources"`
-		DRM json.RawMessage `json:"drm"`
+		DRM       json.RawMessage    `json:"drm"`
+		Subtitles []playlistSubtitle `json:"subtitles"`
 	}
 	err := p.get(ctx, id+"/videos/playlist", url.Values{"videoType": {"MOVIE"}}, &pl)
 	var apiErr *apiError
@@ -453,7 +455,32 @@ func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, err
 	if len(hls) == 0 || hls[0].Src == "" {
 		return provider.Stream{}, fmt.Errorf("%w: no HLS source", provider.ErrUnavailable)
 	}
-	return provider.Stream{URL: hls[0].Src, Header: http.Header{"User-Agent": {userAgent}}}, nil
+	s := provider.Stream{URL: hls[0].Src, Header: http.Header{"User-Agent": {userAgent}}}
+	for _, sub := range pl.Subtitles {
+		if sub.URL != "" {
+			s.Subtitles = append(s.Subtitles, sub.subtitle())
+		}
+	}
+	return s, nil
+}
+
+// playlistSubtitle is TTML subtitles in a playlist, such as
+// {"url":"https://s.tvp.pl/…/….xml","language":"POLISH_DLA_NIESLYSZACYCH","isoCode":"POL"}.
+// The language names them; "DLA_NIESLYSZACYCH" is for the deaf and hard of
+// hearing.
+type playlistSubtitle struct {
+	URL      string `json:"url"`
+	Language string `json:"language"`
+	ISOCode  string `json:"isoCode"` // ISO 639-2
+}
+
+func (s playlistSubtitle) subtitle() provider.Subtitle {
+	return provider.Subtitle{
+		URL:      s.URL,
+		Format:   provider.TTML,
+		Language: strings.ToLower(s.ISOCode),
+		SDH:      strings.Contains(s.Language, "NIESLYSZACYCH"),
+	}
 }
 
 type apiError struct {

@@ -22,6 +22,7 @@ import (
 
 	"github.com/combor/magnetowid/internal/nzb"
 	"github.com/combor/magnetowid/internal/provider"
+	"github.com/combor/magnetowid/internal/subtitles"
 )
 
 // Status is a SABnzbd job state.
@@ -578,12 +579,59 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 	if err := q.engine.Download(ctx, s, out, progress); err != nil {
 		return "", err
 	}
-	return q.moveToComplete(out, j.Category, j.Name)
+	subs, err := q.saveSubtitles(ctx, j, s, work)
+	if err != nil {
+		return "", err
+	}
+	return q.moveToComplete(out, subs, j.Category, j.Name)
 }
 
-// moveToComplete moves out to {dir}/{category}/{name}/{name}.mp4, trying
-// name.1, name.2, ... if the folder exists or another job references it.
-func (q *Queue) moveToComplete(out, category, name string) (string, error) {
+// saveSubtitles saves the stream's subtitles in work as SRT files named
+// after the video, and returns their paths. They are extras: subtitles that
+// can't be had are left out, with a warning, and the video kept. It fails
+// only if ctx ends.
+func (q *Queue) saveSubtitles(ctx context.Context, j Job, s provider.Stream, work string) ([]string, error) {
+	var paths []string
+	for _, sub := range s.Subtitles {
+		path := filepath.Join(work, subtitleName(j.Name, sub))
+		if slices.Contains(paths, path) {
+			continue // more in the same language
+		}
+		srt, err := subtitles.Fetch(ctx, defaultClient, sub, s.Header)
+		if err == nil {
+			err = os.WriteFile(path, srt, 0o666)
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			q.log.Warn("can't save subtitles; keeping the video without them", "id", j.ID, "name", j.Name,
+				"language", sub.Language, "err", err)
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
+}
+
+// subtitleName names subtitles as Sonarr, Radarr and media servers read
+// them: after the video, then the language and "sdh" if they are for the
+// deaf and hard of hearing, e.g. "{video}.pol.sdh.srt".
+func subtitleName(video string, s provider.Subtitle) string {
+	name := video
+	if s.Language != "" {
+		name += "." + SanitizeName(s.Language)
+	}
+	if s.SDH {
+		name += ".sdh"
+	}
+	return name + ".srt"
+}
+
+// moveToComplete moves out to {dir}/{category}/{name}/{name}.mp4, with the
+// extras beside it, trying name.1, name.2, ... if the folder exists or
+// another job references it. An extra that can't be moved is left out.
+func (q *Queue) moveToComplete(out string, extras []string, category, name string) (string, error) {
 	parent := q.dir
 	if c := SanitizeName(category); category != "" && category != "*" && c != "" {
 		parent = filepath.Join(q.dir, c)
@@ -618,6 +666,11 @@ func (q *Queue) moveToComplete(out, category, name string) (string, error) {
 		if err := os.Rename(out, filepath.Join(dest, name+".mp4")); err != nil {
 			os.Remove(dest)
 			return "", err
+		}
+		for _, f := range extras {
+			if err := os.Rename(f, filepath.Join(dest, filepath.Base(f))); err != nil {
+				q.log.Warn("can't move a download's extra file; leaving it out", "file", f, "err", err)
+			}
 		}
 		return dest, nil
 	}

@@ -54,9 +54,21 @@ type Item struct {
 
 // Stream is what the download engine fetches.
 type Stream struct {
-	URL    string // anything ffmpeg can open
-	Header http.Header
+	URL       string // anything ffmpeg can open
+	Header    http.Header
+	Subtitles []Subtitle // saved next to the video
 }
+
+// Subtitle is a stream's subtitles in one language.
+type Subtitle struct {
+	URL      string // fetched with the stream's Header
+	Format   string // TTML, the only one read so far
+	Language string // ISO 639 code, e.g. "pol"; "" if unknown
+	SDH      bool   // for the deaf and hard of hearing
+}
+
+// TTML is W3C Timed Text, a Subtitle Format.
+const TTML = "ttml"
 
 // Provider is one VOD site.
 type Provider interface {

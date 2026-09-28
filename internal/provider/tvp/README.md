@@ -126,3 +126,12 @@ Limitations:
 - A film that TVP added more than about two weeks ago isn't offered, even if
   it turns free later. It needs a search.
 
+
+## Subtitles
+
+TVP's own series have subtitles for the deaf and hard of hearing, and its
+Ukrainian versions (*UA Ranczo*) have Ukrainian ones. magnetowid saves them next
+to the video as SRT, e.g. `<release>.pol.sdh.srt` or `<release>.ukr.srt`,
+keeping the colours that tell the speakers apart. TVP gives the language as an
+ISO 639-2 code. See [Subtitles](../../../docs/usage.md#subtitles) for importing
+them into Sonarr and Radarr.

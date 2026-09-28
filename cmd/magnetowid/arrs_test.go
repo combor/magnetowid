@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,7 +25,8 @@ import (
 // TestSonarrAndRadarr runs magnetowid with Sonarr and Radarr, and fakes of
 // the sites magnetowid reads (see fakeSites). Each app searches for an
 // episode or a film, and gets another by RSS sync. The test checks that it
-// grabs each by its title, and imports it as Polish WEBDL-1080p.
+// grabs each by its title, and imports it as Polish WEBDL-1080p, with its
+// subtitles.
 //
 // Set MAGNETOWID_SONARR_IMAGE and MAGNETOWID_RADARR_IMAGE to the images to
 // test with, or run `make integration`, which pins them. The apps run on the
@@ -116,12 +118,14 @@ func testSonarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid) {
 	a.command(ctx, t, map[string]any{"name": "EpisodeSearch", "episodeIds": []int{e2}})
 	a.checkGrab(ctx, t, "episodeId", e2, "Days.of.Honor.S01E02.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "seriesMatchType", "")
 	checkFile(t, a.waitImport(ctx, t, episodeFile(e2)))
+	a.checkSubtitles(t, 1)
 
 	// By RSS sync: TVDB says episode 3 aired yesterday.
 	mw.waitFeed(ctx, t, url.Values{"t": {"tvsearch"}, "cat": {"5000,5040"}}, "Days.of.Honor.S01E03.")
 	a.command(ctx, t, map[string]any{"name": "RssSync"})
 	a.checkGrab(ctx, t, "episodeId", e3, "Days.of.Honor.S01E03.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "seriesMatchType", "Rss")
 	checkFile(t, a.waitImport(ctx, t, episodeFile(e3)))
+	a.checkSubtitles(t, 2)
 }
 
 func testRadarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid, sites *fakeSites) {
@@ -151,6 +155,7 @@ func testRadarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid, sites
 	a.command(ctx, t, map[string]any{"name": "MoviesSearch", "movieIds": []int{cubeID}})
 	a.checkGrab(ctx, t, "movieId", cubeID, "Cube.1998.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "movieMatchType", "")
 	checkFile(t, a.waitImport(ctx, t, movieFile(cubeID)))
+	a.checkSubtitles(t, 1)
 
 	// By RSS sync: Radarr searches for Sexmission before TVP has it, so
 	// magnetowid watches for it among TVP's newest films. It looks through
@@ -165,6 +170,29 @@ func testRadarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid, sites
 	a.command(ctx, t, map[string]any{"name": "RssSync"})
 	a.checkGrab(ctx, t, "movieId", sexmissionID, "Seksmisja.1984.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "movieMatchType", "Rss")
 	checkFile(t, a.waitImport(ctx, t, movieFile(sexmissionID)))
+	a.checkSubtitles(t, 2)
+}
+
+// checkSubtitles checks that the app has imported n SRT files of Polish
+// subtitles for the deaf and hard of hearing into its library.
+func (a *arr) checkSubtitles(t *testing.T, n int) {
+	t.Helper()
+	var srts []string
+	filepath.WalkDir(a.library, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && strings.HasSuffix(path, ".srt") {
+			srts = append(srts, path)
+		}
+		return nil
+	})
+	subs := 0
+	for _, path := range srts {
+		if strings.HasSuffix(path, ".pl.sdh.srt") {
+			subs++
+		}
+	}
+	if subs != n {
+		t.Errorf("%s imported %d Polish SDH subtitles, want %d; its subtitles: %q", a.name, subs, n, srts)
+	}
 }
 
 // checkFile checks an imported file's quality and language.
@@ -457,6 +485,13 @@ func (a *arr) connect(ctx context.Context, t *testing.T, mw *magnetowid, categor
 	a.call(ctx, t, "POST", "/indexer", indexer, nil)
 
 	a.call(ctx, t, "POST", "/rootfolder", map[string]any{"path": a.library}, nil)
+
+	// Subtitles are imported only with Import Extra Files, as docs/usage.md says.
+	var media map[string]any
+	a.call(ctx, t, "GET", "/config/mediamanagement", nil, &media)
+	media["importExtraFiles"] = true
+	media["extraFileExtensions"] = "srt"
+	a.call(ctx, t, "PUT", fmt.Sprintf("/config/mediamanagement/%v", media["id"]), media, nil)
 }
 
 // schema returns the settings of a new download client or indexer with
