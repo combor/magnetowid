@@ -98,3 +98,30 @@ about:
   searches Sonarr runs when a season search finds nothing. Stream URLs aren't
   kept: TVP ties them to the requesting IP address.
 
+## New films
+
+TVP lists its newest products, films among them. vodarr offers Radarr the
+films on that list that Radarr has searched for:
+
+- **Watch list:** when Radarr searches for a film, vodarr watches for it, by
+  the title and year Radarr searched with, even if TVP has it: its stream may
+  not be readable at the time.
+  Radarr searches with a film's title and its original title, so a film is
+  often watched under both. The list is kept in `.vodarr-jobs.db` and
+  survives restarts. Films stay on it.
+- **Newest products:** each feed update reads TVP's 100 newest products,
+  about two and a half weeks' worth. It offers the free films that match a
+  watched film as a search would: by title or original title, with a year at
+  most one off. TVP's list doesn't give original titles, so vodarr looks each
+  new film up once with TVP's search, if its year could match.
+- **Names:** a release is named with the title and year Radarr searched with,
+  so Radarr matches it even when TVP's year is one off.
+- **Background updates:** as with episodes, the feed is updated in the
+  background at most every 10 minutes, and a film is dated when vodarr first
+  found it free.
+
+Limitations:
+
+- A film that TVP added more than about two weeks ago isn't offered, even if
+  it turns free later. It needs a search.
+

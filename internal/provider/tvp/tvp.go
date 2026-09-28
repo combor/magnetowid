@@ -26,31 +26,47 @@ const (
 
 // Provider searches and resolves TVP VOD content.
 type Provider struct {
-	client  *http.Client
-	baseURL string
-	titles  *titleLookup
-	cache   *responseCache
-	watched *watchList
-	feed    feed
-	log     *slog.Logger
+	client        *http.Client
+	baseURL       string
+	titles        *titleLookup
+	cache         *responseCache
+	watchedSeries *watchList
+	watchedFilms  *watchList
+	seriesFeed    feed
+	filmFeed      feed
+	// originals holds the original titles of TVP's newest films, by ID, and
+	// lookupTried when a film not found in originals was last looked up.
+	// Only rebuildFilms uses them, and one rebuild runs at a time.
+	originals   map[int64]string
+	lookupTried map[int64]time.Time
+	log         *slog.Logger
 }
 
 // New returns a TVP provider using client for API calls. It keeps the
-// series it watches for new episodes in db, or only in memory if db is nil.
+// series and films it watches for new releases in db, or only in memory if
+// db is nil.
 func New(client *http.Client, log *slog.Logger, db *bolt.DB) (*Provider, error) {
-	watched, err := loadWatchList(db)
+	watchedSeries, err := loadWatchList(db, seriesWatch)
+	if err != nil {
+		return nil, err
+	}
+	watchedFilms, err := loadWatchList(db, filmWatch)
 	if err != nil {
 		return nil, err
 	}
 	p := &Provider{
-		client:  client,
-		baseURL: defaultBaseURL,
-		titles:  newTitleLookup(client),
-		cache:   newResponseCache(),
-		watched: watched,
-		log:     log,
+		client:        client,
+		baseURL:       defaultBaseURL,
+		titles:        newTitleLookup(client),
+		cache:         newResponseCache(),
+		watchedSeries: watchedSeries,
+		watchedFilms:  watchedFilms,
+		originals:     make(map[int64]string),
+		lookupTried:   make(map[int64]time.Time),
+		log:           log,
 	}
-	p.feed.rebuild = p.rebuildFeed
+	p.seriesFeed.rebuild = p.rebuildSeries
+	p.filmFeed.rebuild = p.rebuildFilms
 	return p, nil
 }
 
@@ -339,22 +355,40 @@ func (p *Provider) searchMovies(ctx context.Context, q provider.Query) ([]provid
 	want := provider.NormalizeTitle(q.Title)
 	var items []provider.Item
 	for _, v := range vods {
-		if v.Payable || !titleMatches(v, want) {
-			continue
+		if !v.Payable && filmMatches(v, want, q.Year) {
+			items = append(items, movieItem(v, v.Year))
 		}
-		if q.Year > 0 && v.Year > 0 && abs(v.Year-q.Year) > 1 {
-			continue
-		}
-		items = append(items, provider.Item{
-			ID:        strconv.FormatInt(v.ID, 10),
-			Kind:      provider.Movie,
-			Title:     v.Title,
-			Year:      v.Year,
-			Duration:  time.Duration(v.Duration) * time.Second,
-			Published: parseTime(v.Since),
-		})
+	}
+	// Radarr doesn't search again for a film it hasn't got, but looks for it
+	// in RSS sync. It is watched even if found: the item may yet be left out
+	// because its stream can't be read.
+	if q.Year > 0 && want != "" {
+		p.watchFilm(q.Title, q.Year)
 	}
 	return items, nil
+}
+
+// filmMatches reports whether v is the film with the normalized title and
+// the year, which may be one off, as TVP's years sometimes are. A year of 0
+// is unknown.
+func filmMatches(v product, normalized string, year int) bool {
+	return titleMatches(v, normalized) && yearFits(v, year)
+}
+
+func yearFits(v product, year int) bool {
+	return year == 0 || v.Year == 0 || abs(v.Year-year) <= 1
+}
+
+// movieItem is the film v. year names the release when the query has none.
+func movieItem(v product, year int) provider.Item {
+	return provider.Item{
+		ID:        strconv.FormatInt(v.ID, 10),
+		Kind:      provider.Movie,
+		Title:     v.Title,
+		Year:      year,
+		Duration:  time.Duration(v.Duration) * time.Second,
+		Published: parseTime(v.Since),
+	}
 }
 
 // pick returns the first free serial whose title matches exactly.

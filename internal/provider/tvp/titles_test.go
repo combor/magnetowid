@@ -187,7 +187,7 @@ func TestSearchTVDB(t *testing.T) {
 		if !slices.Equal(rec.keywords, tt.searched) {
 			t.Errorf("%s: searched TVP for %q, want %q", tt.name, rec.keywords, tt.searched)
 		}
-		if watched := slices.Contains(p.watched.ids(), tt.tvdbID); watched != tt.watched {
+		if watched := slices.Contains(p.watchedSeries.ids(), tt.tvdbID); watched != tt.watched {
 			t.Errorf("%s: watched = %v, want %v", tt.name, watched, tt.watched)
 		}
 	}
