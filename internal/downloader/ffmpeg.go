@@ -16,6 +16,7 @@ import (
 
 	"github.com/combor/magnetowid/internal/hls"
 	"github.com/combor/magnetowid/internal/provider"
+	"golang.org/x/text/language"
 )
 
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
@@ -29,19 +30,19 @@ type FFmpeg struct {
 }
 
 // Select HLS inputs before invoking ffmpeg, which otherwise probes every variant.
-func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]string, error) {
+func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]string, string, error) {
 	m, ok, err := hls.Load(ctx, client, s)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !ok {
-		return []string{s.URL}, nil
+		return []string{s.URL}, "", nil
 	}
 	inputs := []string{m.Video.URI}
 	if m.Audio != "" {
 		inputs = append(inputs, m.Audio)
 	}
-	return inputs, nil
+	return inputs, m.AudioLanguage, nil
 }
 
 // ffmpeg logs these when it drops data but still exits 0.
@@ -68,7 +69,7 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	if stall == 0 {
 		stall = 5 * time.Minute
 	}
-	inputs, err := pickInputs(parent, client, s)
+	inputs, audioLanguage, err := pickInputs(parent, client, s)
 	if err != nil {
 		return err
 	}
@@ -82,6 +83,14 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	}
 	if len(inputs) == 2 {
 		args = append(args, "-map", "0:v:0", "-map", "1:a:0")
+	}
+	// Opening rendition URLs bypasses the master's language tag. MP4 needs a
+	// three-letter code; leave existing metadata alone when the tag is unknown.
+	if tag, err := language.Parse(strings.TrimSpace(audioLanguage)); err == nil {
+		base, _, _ := tag.Raw()
+		if code := base.ISO3(); code != "und" {
+			args = append(args, "-metadata:s:a:0", "language="+code)
+		}
 	}
 	args = append(args,
 		"-sn", "-dn", // not all subtitle/data streams fit in MP4

@@ -2,6 +2,7 @@ package downloader
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -30,9 +31,10 @@ func makeHLS(t *testing.T, dir string) {
 		"-filter_complex", "[0:v]split=2[hi][lo];[lo]scale=80:60[lo2]",
 		"-map", "[hi]", "-map", "[lo2]", "-map", "1:a",
 		"-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "10", "-c:a", "aac",
+		"-metadata:s:a:0", "language=eng",
 		"-f", "hls", "-hls_time", "1", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4",
 		"-hls_fmp4_init_filename", "init_%v.mp4",
-		"-var_stream_map", "v:0,agroup:aud v:1,agroup:aud a:0,agroup:aud",
+		"-var_stream_map", "v:0,agroup:aud v:1,agroup:aud a:0,agroup:aud,language:pl",
 		"-master_pl_name", "master.m3u8",
 		filepath.Join(dir, "stream_%v.m3u8"))
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -92,6 +94,78 @@ func TestFFmpegDownloadsHLS(t *testing.T) {
 	}
 	if got := strings.Fields(string(probe)); len(got) != 2 {
 		t.Errorf("streams = %v, want video and audio", got)
+	}
+	checkAudioLanguage(t, out, "pol")
+}
+
+func checkAudioLanguage(t *testing.T, path, want string) {
+	t.Helper()
+	probe, err := exec.Command("ffprobe", "-v", "error", "-select_streams", "a:0",
+		"-show_entries", "stream_tags=language", "-of", "default=nw=1:nk=1", path).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.TrimSpace(string(probe)); got != want {
+		t.Errorf("audio language = %q, want %q", got, want)
+	}
+}
+
+func TestFFmpegAudioLanguage(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("ffmpeg not installed")
+	}
+	src := t.TempDir()
+	makeHLS(t, src)
+	// Keep the embedded English tag in both muxed HLS and direct MP4 inputs.
+	cmd := exec.Command("ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+		"-i", filepath.Join(src, "stream_0.m3u8"), "-i", filepath.Join(src, "stream_2.m3u8"),
+		"-map", "0:v:0", "-map", "1:a:0", "-c", "copy", filepath.Join(src, "muxed.mp4"),
+		"-map", "0:v:0", "-map", "1:a:0", "-c", "copy",
+		"-f", "hls", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4",
+		"-hls_fmp4_init_filename", "muxed_init.mp4", filepath.Join(src, "muxed.m3u8"))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generating muxed inputs: %v\n%s", err, out)
+	}
+	for _, tt := range []struct {
+		name, path, language, want string
+	}{
+		{"regional", "/master.m3u8", "pl-PL", "pol"},
+		{"three letter", "/master.m3u8", "pol", "pol"},
+		{"different language", "/master.m3u8", "fr", "fra"},
+		{"muxed", "/master.m3u8", "pl", "pol"},
+		{"missing", "/master.m3u8", "", "eng"},
+		{"invalid", "/master.m3u8", "invalid!", "eng"},
+		{"undefined", "/master.m3u8", "und-PL", "eng"},
+		{"media playlist", "/muxed.m3u8", "", "eng"},
+		{"direct MP4", "/muxed.mp4", "", "eng"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			audio := `TYPE=AUDIO,GROUP-ID="a",NAME="Audio",DEFAULT=YES`
+			if tt.language != "" {
+				audio += `,LANGUAGE="` + tt.language + `"`
+			}
+			video := "stream_0.m3u8"
+			if tt.name == "muxed" {
+				video = "muxed.m3u8"
+			} else {
+				audio += `,URI="stream_2.m3u8"`
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/master.m3u8" {
+					fmt.Fprintf(w, "#EXTM3U\n#EXT-X-MEDIA:%s\n#EXT-X-STREAM-INF:BANDWIDTH=100000,CODECS=\"avc1.640029,mp4a.40.2\",AUDIO=\"a\"\n%s\n", audio, video)
+					return
+				}
+				http.FileServer(http.Dir(src)).ServeHTTP(w, r)
+			}))
+			defer srv.Close()
+			out := filepath.Join(t.TempDir(), "out.mp4")
+			err := (&FFmpeg{}).Download(context.Background(), provider.Stream{URL: srv.URL + tt.path},
+				out, func(time.Duration, int64) {})
+			if err != nil {
+				t.Fatal(err)
+			}
+			checkAudioLanguage(t, out, tt.want)
+		})
 	}
 }
 
@@ -227,7 +301,7 @@ func TestPickInputs(t *testing.T) {
 		switch r.URL.Path {
 		case "/split.m3u8":
 			io.WriteString(w, `#EXTM3U
-#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",DEFAULT=YES,URI="audio.m3u8"
+#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="a",NAME="pl",LANGUAGE="pl",DEFAULT=YES,URI="audio.m3u8"
 #EXT-X-STREAM-INF:BANDWIDTH=5118260,RESOLUTION=1920x1080,CODECS="avc1.640029,mp4a.40.2",AUDIO="a"
 video.m3u8
 `)
@@ -244,17 +318,18 @@ video.m3u8
 	ctx := context.Background()
 
 	for _, tt := range []struct {
-		path string
-		want []string
+		path     string
+		want     []string
+		language string
 	}{
-		{"/split.m3u8", []string{srv.URL + "/video.m3u8", srv.URL + "/audio.m3u8"}},
-		{"/muxed.m3u8", []string{srv.URL + "/high.m3u8"}},
-		{"/media.m3u8", []string{srv.URL + "/media.m3u8"}},
-		{"/film.mp4", []string{srv.URL + "/film.mp4"}},
+		{"/split.m3u8", []string{srv.URL + "/video.m3u8", srv.URL + "/audio.m3u8"}, "pl"},
+		{"/muxed.m3u8", []string{srv.URL + "/high.m3u8"}, ""},
+		{"/media.m3u8", []string{srv.URL + "/media.m3u8"}, ""},
+		{"/film.mp4", []string{srv.URL + "/film.mp4"}, ""},
 	} {
-		got, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + tt.path})
-		if err != nil || !reflect.DeepEqual(got, tt.want) {
-			t.Errorf("%s: got %v, %v; want %v", tt.path, got, err, tt.want)
+		got, language, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + tt.path})
+		if err != nil || !reflect.DeepEqual(got, tt.want) || language != tt.language {
+			t.Errorf("%s: got %v, %q, %v; want %v, %q", tt.path, got, language, err, tt.want, tt.language)
 		}
 	}
 }
