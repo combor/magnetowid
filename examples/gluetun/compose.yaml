@@ -1,6 +1,5 @@
 services:
   gluetun:
-    # Replace latest with a release tag or digest to control image updates.
     image: qmcgaw/gluetun:latest
     container_name: magnetowid-gluetun
     restart: unless-stopped

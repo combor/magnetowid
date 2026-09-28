@@ -49,8 +49,7 @@ and publish its proxy port to the host running magnetowid.
 For a new Gluetun container, install
 [Docker with Compose](https://docs.docker.com/compose/install/).
 Download [compose.proxy.yaml](compose.proxy.yaml) into a working directory
-alongside `wg0.conf`. Edit it for your VPN and preferred Gluetun image tag or
-digest, then run:
+alongside `wg0.conf`. Edit it for your VPN, then run:
 
 ```sh
 docker compose -p magnetowid-proxy -f compose.proxy.yaml up -d --wait
@@ -147,8 +146,7 @@ done
 ```
 
 Edit [compose.yaml](compose.yaml) for your VPN.
-It uses a WireGuard configuration supplied by your VPN provider. Choose the
-Gluetun image tag or digest you want to run.
+It uses a WireGuard configuration supplied by your VPN provider.
 Keep the firewall enabled and the published port bound to loopback.
 
 The [systemd service](magnetowid-gluetun.service),
@@ -194,17 +192,9 @@ sudo systemctl enable --now magnetowid-gluetun magnetowid
 curl --fail http://127.0.0.1:8484/health
 ```
 
-### Update the native setup
-
-After editing the installed files or changing the image version, run
-`sudo systemctl restart magnetowid-gluetun`. This also restarts magnetowid
-and reconnects it to the VPN's network namespace. Run
-`sudo systemctl daemon-reload` first if you changed either systemd file.
-
-To update an image tag such as `latest`, first run
-`sudo docker compose -p magnetowid-vpn -f /etc/magnetowid-gluetun/compose.yaml pull`,
-then restart the systemd unit. Restarting or recreating only the Docker
-container can leave magnetowid in the old network namespace.
+For this setup, restart Gluetun with `sudo systemctl restart magnetowid-gluetun`
+so magnetowid rejoins its network namespace. Restarting only the container can
+leave magnetowid in the old namespace.
 
 ## Connect and verify
 
