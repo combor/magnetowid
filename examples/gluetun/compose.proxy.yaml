@@ -1,0 +1,22 @@
+services:
+  gluetun:
+    # Replace latest with a release tag or digest to control image updates.
+    image: qmcgaw/gluetun:latest
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "127.0.0.1:8888:8888/tcp"
+    environment:
+      VPN_SERVICE_PROVIDER: custom
+      VPN_TYPE: wireguard
+      HTTPPROXY: "on"
+      # Set this if required by your VPN configuration.
+      # WIREGUARD_PERSISTENT_KEEPALIVE_INTERVAL: 25s
+    volumes:
+      - ./wg0.conf:/gluetun/wireguard/wg0.conf:ro
+      - state:/gluetun
+volumes:
+  state:

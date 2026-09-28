@@ -63,9 +63,8 @@ docker compose up -d
 ```
 
 Compose pulls `ghcr.io/combor/magnetowid:latest` and exposes the APIs on port **8484**.
-For a native installation, see the
-[Linux service](docs/usage.md#linux-service) or
-[building from source](docs/usage.md#build-from-source).
+For native packages and other platforms, see the
+[installation options](docs/usage.md#install-and-run).
 
 ## Connect Sonarr and Radarr
 

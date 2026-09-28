@@ -9,6 +9,23 @@ Supported sites: **TVP VOD** (`tvp`). See the [TVP VOD notes](../internal/provid
 
 ## Install and run
 
+Choose the format for your operating system:
+
+| Platform | Installation options |
+|---|---|
+| Linux | [`.deb` or `.rpm` packages](https://github.com/combor/magnetowid/releases/latest), [AUR `magnetowid-bin`](https://aur.archlinux.org/packages/magnetowid-bin), or a release archive |
+| macOS | [Homebrew tap](https://github.com/combor/homebrew-tap) or a release archive |
+| Windows (x86-64) | [Scoop bucket](https://github.com/combor/scoop-bucket) or a release archive |
+| FreeBSD / OpenBSD | [Release archives](https://github.com/combor/magnetowid/releases/latest) |
+| Nix on Linux or macOS | [Nix package](https://github.com/combor/nur) |
+| Docker with Linux containers | [Compose setup](#docker-compose), including Docker Desktop on macOS and Windows |
+
+Release archives are available on the
+[releases page](https://github.com/combor/magnetowid/releases/latest). Choose
+your OS and architecture, extract the binary, and install ffmpeg separately.
+Use the [configuration settings](#configuration) to supply an API key and
+download directory. You can also [build from source](#build-from-source).
+
 ### Docker Compose
 
 Follow the [quick start](../README.md#quick-start) to download the
@@ -39,8 +56,9 @@ docker compose up -d
 
 ### Linux service
 
-The `magnetowid-bin` AUR package, and the `.deb` and `.rpm` packages on the
-[releases page](https://github.com/combor/magnetowid/releases/latest), install
+The `.deb` and `.rpm` packages on the
+[releases page](https://github.com/combor/magnetowid/releases/latest), and the
+`magnetowid-bin` AUR package, install
 magnetowid as a systemd service. Set `MAGNETOWID_API_KEY` in
 `/etc/magnetowid/magnetowid.env`, then start magnetowid and enable it at boot:
 
