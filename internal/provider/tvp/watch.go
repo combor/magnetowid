@@ -12,7 +12,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // watchKind is what a watch list holds, and the bucket it is saved in, by a
@@ -104,7 +104,7 @@ func loadWatchList(db *bolt.DB, kind watchKind) (*watchList, error) {
 }
 
 // add watches r under key and reports whether the key is new to the list. A
-// new one is watched even if saving it fails, until vodarr restarts.
+// new one is watched even if saving it fails, until magnetowid restarts.
 func (w *watchList) add(key string, r watchRecord) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -173,7 +173,7 @@ func (p *Provider) watch(tvdbID int, title string) {
 	p.seriesFeed.markStale()
 	p.log.Info("watching TVP series for new episodes", "tvdbid", tvdbID, "title", title)
 	if err != nil {
-		p.log.Warn("can't save a watched TVP series; watching it until vodarr restarts", "tvdbid", tvdbID, "err", err)
+		p.log.Warn("can't save a watched TVP series; watching it until magnetowid restarts", "tvdbid", tvdbID, "err", err)
 	}
 }
 
@@ -186,6 +186,6 @@ func (p *Provider) watchFilm(title string, year int) {
 	}
 	p.log.Info("watching TVP for a film", "title", title, "year", year)
 	if err != nil {
-		p.log.Warn("can't save a watched film; watching it until vodarr restarts", "title", title, "year", year, "err", err)
+		p.log.Warn("can't save a watched film; watching it until magnetowid restarts", "title", title, "year", year, "err", err)
 	}
 }

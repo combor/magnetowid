@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // makeHLS writes a TVP-like HLS stream into dir: fMP4 video variants
@@ -53,7 +53,7 @@ func TestFFmpegDownloadsHLS(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
 		paths = append(paths, r.URL.Path)
-		if r.UserAgent() != "vodarr-test" {
+		if r.UserAgent() != "magnetowid-test" {
 			badUA = r.UserAgent()
 		}
 		mu.Unlock()
@@ -65,7 +65,7 @@ func TestFFmpegDownloadsHLS(t *testing.T) {
 	var lastDone time.Duration
 	var lastBytes int64
 	err := (&FFmpeg{}).Download(context.Background(),
-		provider.Stream{URL: srv.URL + "/master.m3u8", Header: http.Header{"User-Agent": {"vodarr-test"}}},
+		provider.Stream{URL: srv.URL + "/master.m3u8", Header: http.Header{"User-Agent": {"magnetowid-test"}}},
 		out, func(done time.Duration, bytes int64) { lastDone, lastBytes = done, bytes })
 	if err != nil {
 		t.Fatal(err)
@@ -106,7 +106,7 @@ func TestFFmpegReportsErrors(t *testing.T) {
 	out := filepath.Join(t.TempDir(), "out.mp4")
 	noop := func(time.Duration, int64) {}
 
-	// A missing playlist fails in vodarr, anything else in ffmpeg.
+	// A missing playlist fails in magnetowid, anything else in ffmpeg.
 	err := (&FFmpeg{}).Download(context.Background(), provider.Stream{URL: srv.URL + "/missing.m3u8"}, out, noop)
 	if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 		t.Errorf("missing playlist: err = %v", err)

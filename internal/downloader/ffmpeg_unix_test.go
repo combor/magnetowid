@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // A terminal's Ctrl+C goes to its whole foreground process group, so ffmpeg

@@ -14,8 +14,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/combor/vodarr/internal/hls"
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/hls"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
@@ -95,7 +95,7 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.WaitDelay = 5 * time.Second
-	// A terminal's Ctrl+C must reach only vodarr, which stops ffmpeg and
+	// A terminal's Ctrl+C must reach only magnetowid, which stops ffmpeg and
 	// requeues the job. An ffmpeg that exited first would use up a retry.
 	cmd.SysProcAttr = ownProcessGroup()
 	stdout, err := cmd.StdoutPipe()

@@ -17,9 +17,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/combor/vodarr/internal/nzb"
-	"github.com/combor/vodarr/internal/probe"
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/nzb"
+	"github.com/combor/magnetowid/internal/probe"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // bytesPerSecond estimates release size (4 Mbit/s) when the stream gives no
@@ -477,7 +477,7 @@ func (h *Handler) placeholder(r *http.Request, p provider.Provider, movie bool) 
 	}
 	link := h.baseURL(r, p) + "?" + url.Values{"t": {"get"}, "apikey": {h.APIKey}}.Encode()
 	return item{
-		Title:     "vodarr " + p.Name() + " feed placeholder",
+		Title:     "magnetowid " + p.Name() + " feed placeholder",
 		GUID:      guid{IsPermaLink: false, Value: p.Name() + ":placeholder"},
 		Link:      link,
 		PubDate:   pubDate(placeholderDate),
@@ -642,7 +642,7 @@ func caps(providerName string, tvdbSearch bool) capsDoc {
 		tvParams += ",tvdbid"
 	}
 	return capsDoc{
-		Server: capsServer{Title: "vodarr " + providerName},
+		Server: capsServer{Title: "magnetowid " + providerName},
 		Limits: capsLimits{Max: maxResults, Default: maxResults},
 		Searching: capsSearching{
 			Search:      capsSearch{Available: "yes", SupportedParams: "q", SearchEngine: "raw"},
@@ -698,7 +698,7 @@ func (h *Handler) feed(p provider.Provider, items []item) rss {
 	return rss{
 		Version:   "2.0",
 		NewznabNS: "http://www.newznab.com/DTD/2010/feeds/attributes/",
-		Channel:   channel{Title: "vodarr " + p.Name(), Items: items},
+		Channel:   channel{Title: "magnetowid " + p.Name(), Items: items},
 	}
 }
 

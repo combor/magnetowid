@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // requestCounter counts requests by path.

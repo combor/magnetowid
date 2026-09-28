@@ -1,4 +1,4 @@
-// Package store opens vodarr's database. The downloader and the providers
+// Package store opens magnetowid's database. The downloader and the providers
 // share one handle, as bbolt allows only one per file; each keeps its data in
 // a bucket of its own.
 package store
@@ -16,10 +16,10 @@ import (
 
 // File is the database in the download folder. It is named after the jobs,
 // which it held alone at first.
-const File = ".vodarr-jobs.db"
+const File = ".magnetowid-jobs.db"
 
 // Version is the database format. Open refuses a newer one, which this
-// vodarr might misread.
+// magnetowid might misread.
 const Version = 1
 
 var (
@@ -33,7 +33,7 @@ func Open(dir string) (*bolt.DB, error) {
 	// Without a timeout, Open waits forever for another process's lock.
 	db, err := bolt.Open(path, 0o666, &bolt.Options{Timeout: time.Second})
 	if errors.Is(err, bolterrors.ErrTimeout) {
-		return nil, fmt.Errorf("%s is in use by another vodarr", path)
+		return nil, fmt.Errorf("%s is in use by another magnetowid", path)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
@@ -60,7 +60,7 @@ func checkVersion(tx *bolt.Tx) error {
 		return fmt.Errorf("unknown format version %q", v)
 	}
 	if n > Version {
-		return fmt.Errorf("format version %d is from a newer vodarr, which this one (%d) can't read", n, Version)
+		return fmt.Errorf("format version %d is from a newer magnetowid, which this one (%d) can't read", n, Version)
 	}
 	return nil
 }

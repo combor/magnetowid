@@ -1,4 +1,4 @@
-// Package hls reads HLS master playlists and picks the variant vodarr
+// Package hls reads HLS master playlists and picks the variant magnetowid
 // downloads.
 package hls
 
@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // RFC 6381 codec prefixes of video codecs.

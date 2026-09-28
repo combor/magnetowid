@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // The feeds offer new episodes of the watched series to Sonarr's RSS sync,

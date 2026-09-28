@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // TVP numbers the episodes of long soaps from the series' start and keeps

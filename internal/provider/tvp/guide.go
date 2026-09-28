@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // TVP's TV guide names the episode of a soap each broadcast was ("M jak

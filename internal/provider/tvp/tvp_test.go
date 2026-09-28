@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // Fixtures trimmed from real TVP responses (2026-09-26).

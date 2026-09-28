@@ -16,12 +16,12 @@ import (
 // TestContainerServesAPIs starts the container image with nothing but an API
 // key, as an operator would, and checks that it passes its startup checks
 // (ffmpeg on PATH, a writable download directory) and answers both APIs. Set
-// VODARR_SMOKE_IMAGE to the image under test, or run `make docker-smoke`,
+// MAGNETOWID_SMOKE_IMAGE to the image under test, or run `make docker-smoke`,
 // which builds it first.
 func TestContainerServesAPIs(t *testing.T) {
-	image := os.Getenv("VODARR_SMOKE_IMAGE")
+	image := os.Getenv("MAGNETOWID_SMOKE_IMAGE")
 	if image == "" {
-		t.Skip("VODARR_SMOKE_IMAGE is unset; no image to test")
+		t.Skip("MAGNETOWID_SMOKE_IMAGE is unset; no image to test")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -29,7 +29,7 @@ func TestContainerServesAPIs(t *testing.T) {
 
 	const apiKey = "smoke"
 	// No --rm, so a container that exits during startup keeps its logs.
-	id := docker(ctx, t, "run", "-d", "-p", "127.0.0.1::8484", "-e", "VODARR_API_KEY="+apiKey, image)
+	id := docker(ctx, t, "run", "-d", "-p", "127.0.0.1::8484", "-e", "MAGNETOWID_API_KEY="+apiKey, image)
 	t.Cleanup(func() {
 		if t.Failed() {
 			logs, _ := exec.Command("docker", "logs", id).CombinedOutput()
@@ -46,8 +46,8 @@ func TestContainerServesAPIs(t *testing.T) {
 	}
 }
 
-// checkAPIs waits for vodarr at base to answer, then checks both APIs and that
-// finished downloads go to downloadDir.
+// checkAPIs waits for magnetowid at base to answer, then checks both APIs and
+// that finished downloads go to downloadDir.
 func checkAPIs(ctx context.Context, t *testing.T, base, apiKey, downloadDir string) {
 	t.Helper()
 	wait, cancel := context.WithTimeout(ctx, time.Minute)

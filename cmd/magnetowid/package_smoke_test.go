@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// distro is a Linux distribution whose vodarr package TestPackageService
+// distro is a Linux distribution whose magnetowid package TestPackageService
 // installs.
 type distro struct {
 	name string
@@ -35,9 +35,9 @@ var distros = []distro{
 		dockerfile: `FROM debian:trixie-slim
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends systemd`,
-		install:  "apt-get install -y /dist/vodarr_*_linux_$GOARCH.deb",
-		upgrade:  "apt-get install -y --reinstall /dist/vodarr_*_linux_$GOARCH.deb",
-		remove:   "apt-get remove -y vodarr",
+		install:  "apt-get install -y /dist/magnetowid_*_linux_$GOARCH.deb",
+		upgrade:  "apt-get install -y --reinstall /dist/magnetowid_*_linux_$GOARCH.deb",
+		remove:   "apt-get remove -y magnetowid",
 		restarts: true,
 		x264:     true,
 	},
@@ -45,9 +45,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends systemd`,
 		name: "fedora",
 		dockerfile: `FROM fedora:44
 RUN dnf install -y systemd`,
-		install:  "dnf install -y /dist/vodarr_*_linux_$GOARCH.rpm",
-		upgrade:  "dnf reinstall -y /dist/vodarr_*_linux_$GOARCH.rpm",
-		remove:   "dnf remove -y vodarr",
+		install:  "dnf install -y /dist/magnetowid_*_linux_$GOARCH.rpm",
+		upgrade:  "dnf reinstall -y /dist/magnetowid_*_linux_$GOARCH.rpm",
+		remove:   "dnf remove -y magnetowid",
 		restarts: true,
 	},
 	{
@@ -59,30 +59,30 @@ RUN pacman -Syu --noconfirm --needed binutils debugedit fakeroot && useradd -m b
 		install: `set -e
 install -d -o builder /build
 cd /build
-cp /dist/aur/vodarr-bin.pkgbuild PKGBUILD
-cp /packaging/vodarr.install .
+cp /dist/aur/magnetowid-bin.pkgbuild PKGBUILD
+cp /packaging/magnetowid.install .
 . ./PKGBUILD
-cp /dist/vodarr_*_linux_$GOARCH.tar.gz "${pkgname}_${pkgver}_$(uname -m).tar.gz"
+cp /dist/magnetowid_*_linux_$GOARCH.tar.gz "${pkgname}_${pkgver}_$(uname -m).tar.gz"
 chown builder ./*
 runuser -u builder -- makepkg --nodeps
-pacman -U --noconfirm vodarr-bin-*.pkg.tar.zst`,
-		upgrade: "pacman -U --noconfirm /build/vodarr-bin-*.pkg.tar.zst",
-		remove:  "systemctl disable --now vodarr && pacman -R --noconfirm vodarr-bin",
+pacman -U --noconfirm magnetowid-bin-*.pkg.tar.zst`,
+		upgrade: "pacman -U --noconfirm /build/magnetowid-bin-*.pkg.tar.zst",
+		remove:  "systemctl disable --now magnetowid && pacman -R --noconfirm magnetowid-bin",
 		x264:    true,
 	},
 }
 
 // TestPackageService installs each Linux package from a GoReleaser snapshot in
 // a container that boots systemd, as an operator would, and takes the service
-// through its lifecycle. Set VODARR_SMOKE_DIST to the absolute path of the
+// through its lifecycle. Set MAGNETOWID_SMOKE_DIST to the absolute path of the
 // snapshot's dist folder, or run `make package-smoke`, which builds it first.
 func TestPackageService(t *testing.T) {
-	dist := os.Getenv("VODARR_SMOKE_DIST")
+	dist := os.Getenv("MAGNETOWID_SMOKE_DIST")
 	if dist == "" {
-		t.Skip("VODARR_SMOKE_DIST is unset; no packages to test")
+		t.Skip("MAGNETOWID_SMOKE_DIST is unset; no packages to test")
 	}
 	if !filepath.IsAbs(dist) {
-		t.Fatalf("VODARR_SMOKE_DIST is %q, want an absolute path", dist)
+		t.Fatalf("MAGNETOWID_SMOKE_DIST is %q, want an absolute path", dist)
 	}
 	packaging, err := filepath.Abs(filepath.Join("..", "..", "packaging", "linux"))
 	if err != nil {
@@ -92,7 +92,7 @@ func TestPackageService(t *testing.T) {
 	// Run under the unit's sandbox, the download engine's tests show that the
 	// hardening leaves ffmpeg working.
 	engineTests := filepath.Join(t.TempDir(), "engine.test")
-	build := exec.Command("go", "test", "-c", "-o", engineTests, "github.com/combor/vodarr/internal/downloader")
+	build := exec.Command("go", "test", "-c", "-o", engineTests, "github.com/combor/magnetowid/internal/downloader")
 	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("building the download engine tests: %v\n%s", err, out)
@@ -113,7 +113,7 @@ func testPackage(t *testing.T, d distro, dist, packaging, engineTests string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
 
-	image := "vodarr-package-smoke-" + d.name
+	image := "magnetowid-package-smoke-" + d.name
 	build := exec.CommandContext(ctx, "docker", "build", "-q", "-t", image, "-")
 	build.Stdin = strings.NewReader(d.dockerfile)
 	if out, err := build.CombinedOutput(); err != nil {
@@ -132,64 +132,64 @@ func testPackage(t *testing.T, d distro, dist, packaging, engineTests string) {
 			// ctx is done by now.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
-			journal, _ := container{ctx: ctx, id: id}.try("journalctl -u vodarr --no-pager -o cat -n 100")
-			t.Logf("vodarr journal:\n%s", journal)
+			journal, _ := container{ctx: ctx, id: id}.try("journalctl -u magnetowid --no-pager -o cat -n 100")
+			t.Logf("magnetowid journal:\n%s", journal)
 		}
 		_ = exec.Command("docker", "rm", "-f", id).Run()
 	})
 	c.await(t, "systemctl is-system-running", "running", "degraded")
 
 	c.sh(t, d.install)
-	if groups := strings.Fields(c.sh(t, "id -nG vodarr")); !slices.Contains(groups, "media") {
-		t.Errorf("vodarr is in groups %q, want media", groups)
+	if groups := strings.Fields(c.sh(t, "id -nG magnetowid")); !slices.Contains(groups, "media") {
+		t.Errorf("magnetowid is in groups %q, want media", groups)
 	}
-	// The packaged settings have no API key, which vodarr won't run without.
-	if state, _ := c.try("systemctl is-enabled vodarr"); state != "disabled" {
+	// The packaged settings have no API key, which magnetowid won't run without.
+	if state, _ := c.try("systemctl is-enabled magnetowid"); state != "disabled" {
 		t.Errorf("installed service is %s, want disabled", state)
 	}
-	c.sh(t, "systemctl start vodarr")
-	c.await(t, "systemctl show -p Result --value vodarr", "exit-code")
-	c.sh(t, "systemctl stop vodarr")
+	c.sh(t, "systemctl start magnetowid")
+	c.await(t, "systemctl show -p Result --value magnetowid", "exit-code")
+	c.sh(t, "systemctl stop magnetowid")
 
-	docker(ctx, t, "cp", engineTests, id+":/var/lib/vodarr/engine.test")
-	c.sh(t, `mkdir -p /run/systemd/system/vodarr.service.d
-printf '[Service]\nExecStart=\nExecStart=/var/lib/vodarr/engine.test -test.v\nStandardOutput=file:/var/lib/vodarr/engine.log\nRestart=no\n' >/run/systemd/system/vodarr.service.d/engine.conf
+	docker(ctx, t, "cp", engineTests, id+":/var/lib/magnetowid/engine.test")
+	c.sh(t, `mkdir -p /run/systemd/system/magnetowid.service.d
+printf '[Service]\nExecStart=\nExecStart=/var/lib/magnetowid/engine.test -test.v\nStandardOutput=file:/var/lib/magnetowid/engine.log\nRestart=no\n' >/run/systemd/system/magnetowid.service.d/engine.conf
 systemctl daemon-reload
-systemctl start vodarr`)
-	c.await(t, "systemctl show -p ActiveState --value vodarr", "inactive", "failed")
-	log := c.sh(t, "cat /var/lib/vodarr/engine.log")
-	if result := c.sh(t, "systemctl show -p Result --value vodarr"); result != "success" {
+systemctl start magnetowid`)
+	c.await(t, "systemctl show -p ActiveState --value magnetowid", "inactive", "failed")
+	log := c.sh(t, "cat /var/lib/magnetowid/engine.log")
+	if result := c.sh(t, "systemctl show -p Result --value magnetowid"); result != "success" {
 		t.Errorf("download engine tests under the sandbox: %s\n%s", result, log)
 	} else if d.x264 && !strings.Contains(log, "--- PASS: TestFFmpegDownloadsHLS") {
 		t.Errorf("ffmpeg download test didn't run under the sandbox:\n%s", log)
 	}
-	c.sh(t, "rm -r /run/systemd/system/vodarr.service.d /var/lib/vodarr/engine.* && systemctl daemon-reload")
+	c.sh(t, "rm -r /run/systemd/system/magnetowid.service.d /var/lib/magnetowid/engine.* && systemctl daemon-reload")
 
-	const apiKey, downloadDir = "smoke", "/var/lib/vodarr/downloads"
-	c.sh(t, "sed -i 's/^VODARR_API_KEY=$/VODARR_API_KEY="+apiKey+"/' /etc/vodarr/vodarr.env")
-	c.sh(t, "systemctl enable --now vodarr")
+	const apiKey, downloadDir = "smoke", "/var/lib/magnetowid/downloads"
+	c.sh(t, "sed -i 's/^MAGNETOWID_API_KEY=$/MAGNETOWID_API_KEY="+apiKey+"/' /etc/magnetowid/magnetowid.env")
+	c.sh(t, "systemctl enable --now magnetowid")
 	addr, _, _ := strings.Cut(docker(ctx, t, "port", id, "8484/tcp"), "\n")
 	base := "http://" + addr
 	checkAPIs(ctx, t, base, apiKey, downloadDir)
 	// Sonarr and Radarr, in the media group, must be able to move downloads.
-	if got := c.sh(t, "stat -c '%a %U:%G' "+downloadDir+"/tv"); got != "775 vodarr:media" {
-		t.Errorf("category folder is %s, want 775 vodarr:media", got)
+	if got := c.sh(t, "stat -c '%a %U:%G' "+downloadDir+"/tv"); got != "775 magnetowid:media" {
+		t.Errorf("category folder is %s, want 775 magnetowid:media", got)
 	}
 
-	pid := c.sh(t, "systemctl show -p MainPID --value vodarr")
+	pid := c.sh(t, "systemctl show -p MainPID --value magnetowid")
 	c.sh(t, d.upgrade)
-	if got := c.sh(t, "systemctl show -p MainPID --value vodarr"); (got != pid) != d.restarts {
+	if got := c.sh(t, "systemctl show -p MainPID --value magnetowid"); (got != pid) != d.restarts {
 		t.Errorf("upgrade changed the main PID from %s to %s, want a restart: %v", pid, got, d.restarts)
 	}
 	// Still serving, with the API key kept.
 	checkAPIs(ctx, t, base, apiKey, downloadDir)
 
 	c.sh(t, d.remove)
-	if state, _ := c.try("systemctl is-active vodarr"); state != "inactive" {
+	if state, _ := c.try("systemctl is-active magnetowid"); state != "inactive" {
 		t.Errorf("removed service is %s, want inactive", state)
 	}
-	c.sh(t, "test ! -e /usr/lib/systemd/system/vodarr.service")
-	c.sh(t, "test ! -e /etc/systemd/system/multi-user.target.wants/vodarr.service")
+	c.sh(t, "test ! -e /usr/lib/systemd/system/magnetowid.service")
+	c.sh(t, "test ! -e /etc/systemd/system/multi-user.target.wants/magnetowid.service")
 }
 
 // container is a running container.

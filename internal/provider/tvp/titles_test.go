@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // Skyhook shows, trimmed from real responses (2026-09-27) except the IDs

@@ -1,6 +1,6 @@
 version: 2
 
-project_name: vodarr
+project_name: magnetowid
 
 release:
   prerelease: auto
@@ -10,9 +10,9 @@ before:
     - go mod tidy
 
 builds:
-  - id: vodarr
-    main: ./cmd/vodarr
-    binary: vodarr
+  - id: magnetowid
+    main: ./cmd/magnetowid
+    binary: magnetowid
     env:
       - CGO_ENABLED=0
     mod_timestamp: '{{ .CommitTimestamp }}'
@@ -48,7 +48,7 @@ notarize:
         timeout: 20m
 
 archives:
-  - id: vodarr
+  - id: magnetowid
     formats:
       - tar.gz
     name_template: '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
@@ -60,7 +60,7 @@ archives:
     files:
       - LICENSE
       - README.md
-      - src: packaging/linux/vodarr.{service,sysusers,env}
+      - src: packaging/linux/magnetowid.{service,sysusers,env}
         dst: systemd
         strip_parent: true
 
@@ -69,12 +69,12 @@ checksum:
   algorithm: sha256
 
 nfpms:
-  - id: vodarr
-    package_name: vodarr
+  - id: magnetowid
+    package_name: magnetowid
     ids:
-      - vodarr
+      - magnetowid
     vendor: combor
-    homepage: https://github.com/combor/vodarr
+    homepage: https://github.com/combor/magnetowid
     maintainer: 'combor <163394+combor@users.noreply.github.com>'
     description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
     license: BSD-3-Clause
@@ -97,19 +97,19 @@ nfpms:
         key_file: '{{ if isEnvSet "GPG_KEY_PATH" }}{{ .Env.GPG_KEY_PATH }}{{ end }}'
     contents:
       - src: LICENSE
-        dst: /usr/share/licenses/vodarr/LICENSE
+        dst: /usr/share/licenses/magnetowid/LICENSE
         packager: rpm
       - src: LICENSE
-        dst: /usr/share/doc/vodarr/copyright
+        dst: /usr/share/doc/magnetowid/copyright
         packager: deb
-      - src: packaging/linux/vodarr.service
-        dst: /usr/lib/systemd/system/vodarr.service
-      - src: packaging/linux/vodarr.sysusers
-        dst: /usr/lib/sysusers.d/vodarr.conf
-      - dst: /etc/vodarr
+      - src: packaging/linux/magnetowid.service
+        dst: /usr/lib/systemd/system/magnetowid.service
+      - src: packaging/linux/magnetowid.sysusers
+        dst: /usr/lib/sysusers.d/magnetowid.conf
+      - dst: /etc/magnetowid
         type: dir
-      - src: packaging/linux/vodarr.env
-        dst: /etc/vodarr/vodarr.env
+      - src: packaging/linux/magnetowid.env
+        dst: /etc/magnetowid/magnetowid.env
         type: config|noreplace
         file_info:
           mode: 0600
@@ -119,35 +119,35 @@ nfpms:
       postremove: packaging/linux/postremove.sh
 
 aurs:
-  - name: vodarr-bin
-    homepage: https://github.com/combor/vodarr
+  - name: magnetowid-bin
+    homepage: https://github.com/combor/magnetowid
     description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
     license: BSD-3-Clause
     maintainers:
       - 'combor <163394+combor@users.noreply.github.com>'
     private_key: '{{ .Env.AUR_KEY }}'
-    git_url: 'ssh://aur@aur.archlinux.org/vodarr-bin.git'
+    git_url: 'ssh://aur@aur.archlinux.org/magnetowid-bin.git'
     skip_upload: auto
     provides:
-      - vodarr
+      - magnetowid
     conflicts:
-      - vodarr
+      - magnetowid
     depends:
       - ca-certificates
       - ffmpeg
     backup:
-      - etc/vodarr/vodarr.env
-    install: packaging/linux/vodarr.install
+      - etc/magnetowid/magnetowid.env
+    install: packaging/linux/magnetowid.install
     package: |-
-      install -Dm755 "./vodarr" "${pkgdir}/usr/bin/vodarr"
-      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/vodarr-bin/LICENSE"
-      install -Dm644 "./systemd/vodarr.service" "${pkgdir}/usr/lib/systemd/system/vodarr.service"
-      install -Dm644 "./systemd/vodarr.sysusers" "${pkgdir}/usr/lib/sysusers.d/vodarr.conf"
-      install -Dm600 "./systemd/vodarr.env" "${pkgdir}/etc/vodarr/vodarr.env"
+      install -Dm755 "./magnetowid" "${pkgdir}/usr/bin/magnetowid"
+      install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/magnetowid-bin/LICENSE"
+      install -Dm644 "./systemd/magnetowid.service" "${pkgdir}/usr/lib/systemd/system/magnetowid.service"
+      install -Dm644 "./systemd/magnetowid.sysusers" "${pkgdir}/usr/lib/sysusers.d/magnetowid.conf"
+      install -Dm600 "./systemd/magnetowid.env" "${pkgdir}/etc/magnetowid/magnetowid.env"
 
 homebrew_casks:
-  - name: vodarr
-    homepage: https://github.com/combor/vodarr
+  - name: magnetowid
+    homepage: https://github.com/combor/magnetowid
     description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
     dependencies:
       - formula: ffmpeg
@@ -159,8 +159,8 @@ homebrew_casks:
     skip_upload: auto
 
 scoops:
-  - name: vodarr
-    homepage: https://github.com/combor/vodarr
+  - name: magnetowid
+    homepage: https://github.com/combor/magnetowid
     description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
     license: BSD-3-Clause
     depends:
@@ -173,16 +173,16 @@ scoops:
     skip_upload: auto
 
 nix:
-  - name: vodarr
-    homepage: https://github.com/combor/vodarr
+  - name: magnetowid
+    homepage: https://github.com/combor/magnetowid
     description: Downloads movies and series from video-on-demand sites for Sonarr and Radarr.
     license: bsd3
-    main_program: vodarr
-    # The default install script wraps vodarr with ffmpeg on PATH.
+    main_program: magnetowid
+    # The default install script wraps magnetowid with ffmpeg on PATH.
     dependencies:
       - ffmpeg
     extra_install: |-
-      install -Dm644 ./LICENSE "$out/share/licenses/vodarr/LICENSE"
+      install -Dm644 ./LICENSE "$out/share/licenses/magnetowid/LICENSE"
     repository:
       owner: combor
       name: nur

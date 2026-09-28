@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/nzb"
-	"github.com/combor/vodarr/internal/probe"
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/nzb"
+	"github.com/combor/magnetowid/internal/probe"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // streams serves the master playlists fake items resolve to.
@@ -242,7 +242,7 @@ func TestPlaceholderWithoutQuery(t *testing.T) {
 	} {
 		params.Set("apikey", "secret")
 		items := parseFeed(t, get(t, srv, "/fake/api", params))
-		if len(items) != 1 || items[0].Title != "vodarr fake feed placeholder" {
+		if len(items) != 1 || items[0].Title != "magnetowid fake feed placeholder" {
 			t.Errorf("%v: items = %+v", params, items)
 		}
 	}
@@ -561,7 +561,7 @@ func TestLinksBehindProxy(t *testing.T) {
 		"t": {"tvsearch"}, "q": {"Ranczo"}, "season": {"1"}, "ep": {"1"}, "apikey": {"secret"},
 	}.Encode(), nil)
 	req.Header.Set("X-Forwarded-Proto", "https")
-	req.Header.Set("X-Forwarded-Host", "vodarr.example.com, internal:8484")
+	req.Header.Set("X-Forwarded-Host", "magnetowid.example.com, internal:8484")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +569,7 @@ func TestLinksBehindProxy(t *testing.T) {
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 	items := parseFeed(t, string(body))
-	if len(items) != 1 || !strings.HasPrefix(items[0].Link, "https://vodarr.example.com/fake/api?") {
+	if len(items) != 1 || !strings.HasPrefix(items[0].Link, "https://magnetowid.example.com/fake/api?") {
 		t.Fatalf("items = %+v", items)
 	}
 }
@@ -690,7 +690,7 @@ func TestRSSPlaceholder(t *testing.T) {
 		"error":            {err: errors.New("tvp: HTTP 500")},
 	} {
 		items := parseFeed(t, get(t, newServer(t, fp), "/fake/api", rssSync("0", "100")))
-		if len(items) != 1 || items[0].Title != "vodarr fake feed placeholder" {
+		if len(items) != 1 || items[0].Title != "magnetowid fake feed placeholder" {
 			t.Errorf("%s: items = %+v", name, items)
 			continue
 		}
@@ -725,7 +725,7 @@ func TestRSSKind(t *testing.T) {
 		if fp.gotKind != tt.want {
 			t.Errorf("%v: asked for %v, want %v", tt.params, fp.gotKind, tt.want)
 		}
-		if len(items) != 1 || items[0].Title != "vodarr fake feed placeholder" {
+		if len(items) != 1 || items[0].Title != "magnetowid fake feed placeholder" {
 			t.Errorf("%v: items = %+v", tt.params, items)
 		}
 	}

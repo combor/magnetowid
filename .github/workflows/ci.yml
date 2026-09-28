@@ -64,14 +64,14 @@ jobs:
           context: .
           platforms: linux/amd64
           load: true
-          tags: vodarr:ci
+          tags: magnetowid:ci
           build-args: VERSION=ci-${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Start the image and query both APIs
         env:
-          VODARR_SMOKE_IMAGE: vodarr:ci
-        run: go test -count=1 -run TestContainerServesAPIs ./cmd/vodarr
+          MAGNETOWID_SMOKE_IMAGE: magnetowid:ci
+        run: go test -count=1 -run TestContainerServesAPIs ./cmd/magnetowid
 
   package-smoke:
     name: Package Smoke Test
@@ -91,8 +91,8 @@ jobs:
           args: release --snapshot --clean --skip=nix
       - name: Install and run each package as a systemd service
         env:
-          VODARR_SMOKE_DIST: ${{ github.workspace }}/dist
-        run: go test -count=1 -timeout 20m -run TestPackageService ./cmd/vodarr
+          MAGNETOWID_SMOKE_DIST: ${{ github.workspace }}/dist
+        run: go test -count=1 -timeout 20m -run TestPackageService ./cmd/magnetowid
 
   release:
     name: Release
@@ -174,7 +174,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ghcr.io/combor/vodarr
+          images: ghcr.io/combor/magnetowid
           # A prerelease tag such as v0.4.0-rc1 must not move latest.
           flavor: latest=false
           tags: |
@@ -199,7 +199,7 @@ jobs:
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
-          repo=combor/vodarr
+          repo=combor/magnetowid
           manifest=$RUNNER_TEMP/ghcr-manifest.json
           if ! curl -fsSL "https://ghcr.io/token?service=ghcr.io&scope=repository:$repo:pull" -o "$RUNNER_TEMP/ghcr-token.json"; then
             echo "anonymous pull denied: set the GHCR package to public in its settings, then re-run this job"

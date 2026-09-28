@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/combor/vodarr/internal/downloader"
-	"github.com/combor/vodarr/internal/nzb"
+	"github.com/combor/magnetowid/internal/downloader"
+	"github.com/combor/magnetowid/internal/nzb"
 )
 
 // version must be ≥ 0.7 for Sonarr/Radarr.
@@ -86,7 +86,7 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	}
 	ref, err := nzb.Decode(data)
 	if err != nil {
-		// Not a vodarr NZB; refusing it lets the *arr try elsewhere.
+		// Not a magnetowid NZB; refusing it lets the *arr try elsewhere.
 		h.Log.Warn("rejected NZB", "file", header.Filename, "err", err)
 		writeJSON(w, errorResponse(err.Error()))
 		return
@@ -104,11 +104,11 @@ func (h *Handler) addFile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"status": true, "nzo_ids": []string{id}})
 }
 
-// priorityNames are the SABnzbd priorities vodarr supports, from -1.
+// priorityNames are the SABnzbd priorities magnetowid supports, from -1.
 var priorityNames = []string{"Low", "Normal", "High", "Force"}
 
 // parsePriority reads addfile's priority. The *arr default (-100) counts as
-// Normal, and Paused (-2), which vodarr doesn't support, as Low.
+// Normal, and Paused (-2), which magnetowid doesn't support, as Low.
 func parsePriority(s string) int {
 	p, err := strconv.Atoi(s)
 	if err != nil || p == -100 {

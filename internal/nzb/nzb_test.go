@@ -52,8 +52,8 @@ func TestDecodeRejectsForeignNZB(t *testing.T) {
   <file poster="x" date="1" subject="y"><groups><group>a.b</group></groups>
     <segments><segment bytes="1" number="1">id@x</segment></segments></file>
 </nzb>`
-	if _, err := Decode([]byte(foreign)); !errors.Is(err, ErrNotVodarr) {
-		t.Fatalf("err = %v, want ErrNotVodarr", err)
+	if _, err := Decode([]byte(foreign)); !errors.Is(err, ErrNotMagnetowid) {
+		t.Fatalf("err = %v, want ErrNotMagnetowid", err)
 	}
 	if _, err := Decode([]byte("not xml")); err == nil {
 		t.Fatal("expected error for garbage")

@@ -1,4 +1,4 @@
-// Command vodarr serves VOD sites to Sonarr and Radarr as Newznab indexers
+// Command magnetowid serves VOD sites to Sonarr and Radarr as Newznab indexers
 // and a SABnzbd download client.
 package main
 
@@ -17,13 +17,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/combor/vodarr/internal/downloader"
-	"github.com/combor/vodarr/internal/newznab"
-	"github.com/combor/vodarr/internal/probe"
-	"github.com/combor/vodarr/internal/provider"
-	"github.com/combor/vodarr/internal/provider/tvp"
-	"github.com/combor/vodarr/internal/sabnzbd"
-	"github.com/combor/vodarr/internal/store"
+	"github.com/combor/magnetowid/internal/downloader"
+	"github.com/combor/magnetowid/internal/newznab"
+	"github.com/combor/magnetowid/internal/probe"
+	"github.com/combor/magnetowid/internal/provider"
+	"github.com/combor/magnetowid/internal/provider/tvp"
+	"github.com/combor/magnetowid/internal/sabnzbd"
+	"github.com/combor/magnetowid/internal/store"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -38,11 +38,11 @@ func main() {
 }
 
 func run(log *slog.Logger) error {
-	listen := flag.String("listen", envOr("VODARR_LISTEN", ":8484"), "listen address")
-	apiKey := flag.String("api-key", os.Getenv("VODARR_API_KEY"), "API key for both APIs (required)")
-	downloadDir := flag.String("download-dir", os.Getenv("VODARR_DOWNLOAD_DIR"), "where finished downloads go (required)")
-	categories := flag.String("categories", envOr("VODARR_CATEGORIES", "tv,movies"), "comma-separated download categories")
-	ffmpeg := flag.String("ffmpeg", envOr("VODARR_FFMPEG", "ffmpeg"), "ffmpeg binary")
+	listen := flag.String("listen", envOr("MAGNETOWID_LISTEN", ":8484"), "listen address")
+	apiKey := flag.String("api-key", os.Getenv("MAGNETOWID_API_KEY"), "API key for both APIs (required)")
+	downloadDir := flag.String("download-dir", os.Getenv("MAGNETOWID_DOWNLOAD_DIR"), "where finished downloads go (required)")
+	categories := flag.String("categories", envOr("MAGNETOWID_CATEGORIES", "tv,movies"), "comma-separated download categories")
+	ffmpeg := flag.String("ffmpeg", envOr("MAGNETOWID_FFMPEG", "ffmpeg"), "ffmpeg binary")
 	flag.Parse()
 
 	if *apiKey == "" || *downloadDir == "" {
@@ -104,7 +104,7 @@ func run(log *slog.Logger) error {
 	srv := &http.Server{Addr: *listen, Handler: logRequests(log, mux), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("vodarr listening", "version", version, "addr", *listen, "download_dir", dir, "providers", providers.Names())
+	log.Info("magnetowid listening", "version", version, "addr", *listen, "download_dir", dir, "providers", providers.Names())
 
 	var serveErr error
 	select {

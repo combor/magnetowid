@@ -16,7 +16,7 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 const (

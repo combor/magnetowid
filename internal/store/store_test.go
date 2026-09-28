@@ -81,7 +81,7 @@ func TestNewerVersionIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if db, err := Open(dir); err == nil || !strings.Contains(err.Error(), "newer vodarr") {
+	if db, err := Open(dir); err == nil || !strings.Contains(err.Error(), "newer magnetowid") {
 		if db != nil {
 			db.Close()
 		}
@@ -89,7 +89,7 @@ func TestNewerVersionIsRefused(t *testing.T) {
 	}
 }
 
-// A second vodarr on the same folder fails instead of waiting for the lock.
+// A second magnetowid on the same folder fails instead of waiting for the lock.
 func TestDatabaseInUse(t *testing.T) {
 	dir := t.TempDir()
 	db, err := Open(dir)
@@ -97,7 +97,7 @@ func TestDatabaseInUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "in use by another vodarr") {
+	if _, err := Open(dir); err == nil || !strings.Contains(err.Error(), "in use by another magnetowid") {
 		t.Fatalf("err = %v", err)
 	}
 }

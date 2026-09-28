@@ -11,8 +11,8 @@ import (
 
 	bolt "go.etcd.io/bbolt"
 
-	"github.com/combor/vodarr/internal/provider"
-	"github.com/combor/vodarr/internal/store"
+	"github.com/combor/magnetowid/internal/provider"
+	"github.com/combor/magnetowid/internal/store"
 )
 
 func openStore(t *testing.T, dir string) *bolt.DB {
@@ -93,7 +93,7 @@ func TestCorruptWatchRecordFailsNew(t *testing.T) {
 	}
 }
 
-// Radarr doesn't search again for a film it hasn't got, so vodarr watches
+// Radarr doesn't search again for a film it hasn't got, so magnetowid watches
 // for it.
 func TestFilmSearchWatches(t *testing.T) {
 	p := newProviderWith(t, func(key string) (string, bool) {

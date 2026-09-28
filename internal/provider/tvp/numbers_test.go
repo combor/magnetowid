@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/combor/vodarr/internal/provider"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // soapNow is around when Hundreds' recent episodes air, to the minute like

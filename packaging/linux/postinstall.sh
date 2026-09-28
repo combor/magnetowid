@@ -4,7 +4,7 @@
 set -e
 
 if command -v systemd-sysusers >/dev/null 2>&1; then
-	systemd-sysusers vodarr.conf
+	systemd-sysusers magnetowid.conf
 fi
 
 case "$1" in
@@ -17,11 +17,11 @@ esac
 if [ -d /run/systemd/system ]; then
 	systemctl daemon-reload || true
 	if [ -n "$upgrade" ]; then
-		systemctl try-restart vodarr.service || true
+		systemctl try-restart magnetowid.service || true
 	fi
 fi
 
 if [ -z "$upgrade" ]; then
-	echo "Set VODARR_API_KEY in /etc/vodarr/vodarr.env, then start vodarr with:"
-	echo "  systemctl enable --now vodarr"
+	echo "Set MAGNETOWID_API_KEY in /etc/magnetowid/magnetowid.env, then start magnetowid with:"
+	echo "  systemctl enable --now magnetowid"
 fi

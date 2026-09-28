@@ -1,0 +1,3 @@
+u magnetowid - "magnetowid daemon" /var/lib/magnetowid
+g media -
+m magnetowid media
