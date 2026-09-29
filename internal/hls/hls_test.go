@@ -130,6 +130,13 @@ func TestLoad(t *testing.T) {
 		t.Errorf("redirected master: got %+v, %v, %v; want %+v", m, ok, err, want)
 	}
 
+	// A provider's amended playlist is not fetched again.
+	amended := "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=9000000,RESOLUTION=1920x1080\nhidden-1080p.m3u8\n"
+	m, ok, err = Load(ctx, srv.Client(), provider.Stream{URL: srv.URL + "/token/abc/gone.m3u8", Playlist: amended})
+	if want := (Variant{URI: srv.URL + "/token/abc/hidden-1080p.m3u8", Width: 1920, Height: 1080, Bandwidth: 9000000}); err != nil || !ok || m.Video != want {
+		t.Errorf("amended playlist: got %+v, %v, %v; want %+v", m.Video, ok, err, want)
+	}
+
 	for _, u := range []string{srv.URL + "/media.m3u8", srv.URL + "/video.mpd", srv.URL + "/film.mp4"} {
 		if _, ok, err := Load(ctx, srv.Client(), provider.Stream{URL: u}); ok || err != nil {
 			t.Errorf("%s: ok = %v, err = %v", u, ok, err)

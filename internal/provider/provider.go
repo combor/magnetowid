@@ -51,8 +51,11 @@ type Item struct {
 }
 
 type Stream struct {
-	URL       string // anything ffmpeg can open
-	Header    http.Header
+	URL    string // anything ffmpeg can open
+	Header http.Header
+	// The HLS master playlist at URL, if the provider has amended it, e.g. to
+	// add variants the site omits. Its relative URIs resolve against URL.
+	Playlist  string
 	Subtitles []Subtitle // saved next to the video
 }
 

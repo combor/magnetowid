@@ -22,7 +22,7 @@ magnetowid searches and downloads video-on-demand movies and series through
 Sonarr and Radarr. It provides a Newznab indexer and a SABnzbd-compatible
 download client. No separate SABnzbd installation is needed.
 
-Supported: **TVP VOD**.
+Supported: **TVP VOD** and **BBC iPlayer**.
 
 ## How it works
 
@@ -74,10 +74,11 @@ In each app, add these two connections using the API key from `.env`:
 1. **Download client:** open **Settings → Download Clients**, add **SABnzbd** and
    name it `magnetowid`. Enter magnetowid's host and port `8484`. Set the
    category to `tv` in Sonarr or `movies` in Radarr.
-2. **Indexer:** open **Settings → Indexers** and add **Newznab**. For TVP VOD,
-   use `http://<magnetowid-host>:8484/tvp` with API path `/api`. Select
-   categories `5000, 5040` in Sonarr or `2000, 2040` in Radarr. Set **Download
-   Client** to the `magnetowid` client from step 1.
+2. **Indexer:** open **Settings → Indexers** and add **Newznab**, one per site.
+   For TVP VOD, use `http://<magnetowid-host>:8484/tvp` with API path `/api`;
+   for BBC iPlayer, `http://<magnetowid-host>:8484/bbc`. Select categories
+   `5000, 5040` in Sonarr or `2000, 2040` in Radarr. Set **Download Client** to
+   the `magnetowid` client from step 1.
 3. **Test** and **Save** both connections, then search from Sonarr or Radarr.
 
 Use a host address reachable from your apps, and make sure both can read the

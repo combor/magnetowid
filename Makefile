@@ -29,7 +29,7 @@ integration:
 		go test -count=1 -timeout 20m -v -run TestSonarrAndRadarr ./cmd/magnetowid
 
 live:
-	MAGNETOWID_LIVE=1 go test -count=1 -v -run TestLive ./internal/provider/tvp
+	MAGNETOWID_LIVE=1 go test -count=1 -v -run TestLive ./internal/provider/tvp ./internal/provider/bbc
 
 # Build release artifacts without publishing.
 snapshot:

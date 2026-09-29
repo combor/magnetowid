@@ -83,11 +83,13 @@ func checkAPIs(ctx context.Context, t *testing.T, base, apiKey, downloadDir stri
 		t.Errorf("download dir = %q, want %q", status.Status.CompleteDir, downloadDir)
 	}
 
-	caps, err := get(ctx, base+"/tvp/api?t=caps")
-	if err != nil {
-		t.Errorf("Newznab caps: %v", err)
-	} else if !strings.Contains(string(caps), "<caps>") {
-		t.Errorf("Newznab caps returned %q", caps)
+	for _, p := range []string{"tvp", "bbc"} {
+		caps, err := get(ctx, base+"/"+p+"/api?t=caps")
+		if err != nil {
+			t.Errorf("%s Newznab caps: %v", p, err)
+		} else if !strings.Contains(string(caps), "<caps>") {
+			t.Errorf("%s Newznab caps returned %q", p, caps)
+		}
 	}
 
 	if health, err := get(ctx, base+"/health"); err != nil || string(health) != "OK\n" {
