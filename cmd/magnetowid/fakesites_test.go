@@ -296,6 +296,8 @@ func makeStream(ctx context.Context, t *testing.T, dir string) string {
 		"-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo",
 		"-t", "660", "-map", "0:v", "-map", "1:a",
 		"-c:v", "libx264", "-preset", "ultrafast", "-g", "60", "-c:a", "aac", "-b:a", "32k",
+		// The playlist language must override misleading tags in the segments.
+		"-metadata:s:a:0", "language=eng",
 		"-f", "hls", "-hls_time", "60", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4",
 		"-var_stream_map", "v:0 a:0",
 		"-hls_fmp4_init_filename", "init_%v.mp4", "-hls_segment_filename", "seg_%v_%03d.m4s", "media_%v.m3u8")
