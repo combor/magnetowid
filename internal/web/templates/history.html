@@ -1,0 +1,55 @@
+{{define "page" -}}
+  {{- if .Jobs}}
+  <ol class="rows">
+    {{- range .Jobs}}
+    <li class="row" id="job-{{.ID}}">
+      <span class="pos pos-{{.Tone}}" aria-hidden="true">{{if eq .Tone "ok"}}{{template "icon-check"}}{{else}}{{template "icon-alert"}}{{end}}</span>
+      <p class="row-title" title="{{.Name}}">{{template "name" .}}</p>
+      <span class="badge badge-{{.Tone}}">{{.Status}}</span>
+      <p class="meta">
+        {{- template "chips" .}}
+        <span class="facts">
+          {{- with .Size}}<span>{{.}}</span>{{end -}}
+          {{- with .Took}}<span>took {{.}}</span>{{end -}}
+          {{- with .Attempt}}<span>{{.}} attempts</span>{{end -}}
+          <span>finished {{.Finished}}</span>
+        </span>
+      </p>
+      <div class="actions">
+        {{template "remove-button" .}}
+        <div class="confirm" id="remove-{{.ID}}" popover role="dialog" aria-labelledby="remove-{{.ID}}-title">
+          <h2 class="confirm-title" id="remove-{{.ID}}-title">Remove it from history?</h2>
+          <p class="confirm-name">{{.Label}}</p>
+          <form class="confirm-form" method="post" action="/ui/history/{{.ID}}/delete" hx-post="/ui/history/{{.ID}}/delete">
+            {{- with .Storage}}
+            <label class="check">
+              <input type="checkbox" name="files" value="1">
+              <span>Also delete the downloaded files<code class="path">{{.}}</code></span>
+            </label>
+            {{- end}}
+            {{- if eq .Tone "ok"}}
+            <p class="confirm-text">If Sonarr or Radarr hasn’t imported it yet, it won’t.</p>
+            {{- end}}
+            {{template "remove-notice" .}}
+            <div class="confirm-actions">
+              {{template "keep-button" .}}
+              <button class="btn btn-strong" type="submit"><span class="if-kept">Remove</span><span class="if-deleted">Remove and delete</span></button>
+            </div>
+          </form>
+        </div>
+      </div>
+      {{- with .Error}}
+      {{template "row-error" .}}
+      {{- end}}
+    </li>
+    {{- end}}
+  </ol>
+  <p class="footnote">Finished downloads stay for {{.KeptDays}} days unless Sonarr or Radarr removes them first.</p>
+  {{- else}}
+  <section class="card empty" id="empty">
+    <span class="mark mark-xl">{{template "mark"}}</span>
+    <h2>No finished downloads</h2>
+    <p>Finished downloads stay here for {{.KeptDays}} days unless Sonarr or Radarr removes them first.</p>
+  </section>
+  {{- end}}
+{{- end}}

@@ -148,8 +148,9 @@ default). Subtitle failures log a warning and keep the video.
 
 ### Pausing downloads
 
-Use SABnzbd API commands to pause or resume the queue or individual jobs.
-Sonarr and Radarr display paused jobs but cannot control pausing:
+Pause or resume the queue or single jobs in the [web interface](#web-interface)
+or with SABnzbd API commands. Sonarr and Radarr show paused jobs but cannot
+pause them:
 
 ```sh
 curl 'http://localhost:8484/api?mode=pause&apikey=YOUR_API_KEY'
@@ -163,13 +164,21 @@ interrupted downloads restart from the beginning when resumed.
 
 ## Web interface
 
-Open `http://<host>:8484/` in a browser and sign in with the API key. The page
-shows the running download's progress and time left, the queued jobs in the
-order they will run, and paused or retrying jobs with their last error. It
-refreshes itself every second.
+Open `http://<host>:8484/` in a browser and sign in with the API key.
+
+**Queue** shows the running download's progress and time left, queued jobs in
+run order, and paused or retrying jobs with their last error. It refreshes
+every second. Pause or resume the queue or a job, or remove a job; removing the
+running download deletes its partial file. Resumed downloads restart from the
+beginning.
+
+**History** lists finished and failed downloads, newest first, and refreshes
+every five seconds. Downloads stay for 30 days unless Sonarr or Radarr removes
+them first. Removing one can also delete its folder; Sonarr and Radarr cannot
+import a download removed from history.
 
 Signing in lasts 30 days. Changing `MAGNETOWID_API_KEY` signs every browser
-out. Search for titles and manage downloads in Sonarr/Radarr.
+out. Search for titles in Sonarr/Radarr.
 
 ## Correcting matches
 
@@ -252,8 +261,8 @@ under **Settings → Download Clients**:
 
 ## Troubleshooting
 
-Search for titles and manage downloads in Sonarr/Radarr. The
-[web interface](#web-interface) shows magnetowid's download queue.
+Search for titles in Sonarr/Radarr. The [web interface](#web-interface) shows
+the queue and history, with the last error of each failed or retrying job.
 
 | Problem | What to check |
 |---|---|

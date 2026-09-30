@@ -1,5 +1,5 @@
-// Package web serves the browser interface: a sign-in page and a live view of
-// the download queue.
+// Package web serves the browser interface: sign-in, and live queue and
+// history pages with download controls.
 //
 // static/htmx-4.0.0.min.js is dist/htmx.min.js from the htmx.org 4.0.0 npm
 // package, under the Zero-Clause BSD license.
@@ -27,13 +27,15 @@ import (
 var files embed.FS
 
 var (
-	layout    = template.Must(template.ParseFS(files, "templates/layout.html"))
-	loginPage = page("templates/login.html")
-	queuePage = page("templates/queue.html")
+	layout      = template.Must(template.ParseFS(files, "templates/layout.html"))
+	app         = parse(layout, "templates/app.html")
+	loginPage   = parse(layout, "templates/login.html")
+	queuePage   = parse(app, "templates/queue.html")
+	historyPage = parse(app, "templates/history.html")
 )
 
-func page(name string) *template.Template {
-	return template.Must(template.Must(layout.Clone()).ParseFS(files, name))
+func parse(base *template.Template, name string) *template.Template {
+	return template.Must(template.Must(base.Clone()).ParseFS(files, name))
 }
 
 const (
@@ -53,9 +55,18 @@ type Handler struct {
 // catch-all route.
 func (h *Handler) Register(mux *http.ServeMux) {
 	csrf := http.NewCrossOriginProtection()
+	get := func(pattern string, f http.HandlerFunc) { mux.Handle("GET "+pattern, secure(h.auth(f))) }
+	post := func(pattern string, f http.HandlerFunc) { mux.Handle("POST "+pattern, secure(csrf.Handler(h.auth(f)))) }
 	mux.Handle("GET /{$}", http.RedirectHandler("/ui/", http.StatusSeeOther))
-	mux.Handle("GET /ui/{$}", secure(h.auth(h.queue)))
-	mux.Handle("GET /ui/queue", secure(h.auth(h.queueUpdate)))
+	get("/ui/{$}", h.queue)
+	get("/ui/queue", h.queue)
+	get("/ui/history", h.history)
+	post("/ui/queue/pause", h.pauseQueue(true))
+	post("/ui/queue/resume", h.pauseQueue(false))
+	post("/ui/queue/{id}/pause", h.pauseJob(true))
+	post("/ui/queue/{id}/resume", h.pauseJob(false))
+	post("/ui/queue/{id}/delete", h.cancelJob)
+	post("/ui/history/{id}/delete", h.deleteJob)
 	mux.Handle("GET /ui/login", secure(http.HandlerFunc(h.loginForm)))
 	mux.Handle("POST /ui/login", secure(csrf.Handler(http.HandlerFunc(h.login))))
 	mux.Handle("POST /ui/logout", secure(csrf.Handler(http.HandlerFunc(h.logout))))
@@ -184,17 +195,98 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }
 
-func (h *Handler) view() queueView {
-	return newQueueView(h.Queue.Jobs(), h.Queue.Paused(), h.Queue.Outages(), h.Version, time.Now())
+func (h *Handler) queue(w http.ResponseWriter, r *http.Request) {
+	h.show(w, r, http.StatusOK, "queue", "")
 }
 
-func (h *Handler) queue(w http.ResponseWriter, _ *http.Request) {
-	h.render(w, http.StatusOK, queuePage, "layout", h.view())
+func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
+	h.show(w, r, http.StatusOK, "history", "")
 }
 
-// queueUpdate is the part of the page that refreshes itself.
-func (h *Handler) queueUpdate(w http.ResponseWriter, _ *http.Request) {
-	h.render(w, http.StatusOK, queuePage, "update", h.view())
+// show renders page with an optional notice. htmx requests get only the
+// refreshing part.
+func (h *Handler) show(w http.ResponseWriter, r *http.Request, status int, page, notice string) {
+	jobs, paused, now := h.Queue.Jobs(), h.Queue.Paused(), time.Now()
+	var t *template.Template
+	var v any
+	if page == "history" {
+		hv := newHistoryView(jobs, paused, h.Version, now)
+		hv.Notice = notice
+		t, v = historyPage, hv
+	} else {
+		qv := newQueueView(jobs, paused, h.Queue.Outages(), h.Version, now)
+		qv.Notice = notice
+		t, v = queuePage, qv
+	}
+	name := "layout"
+	if htmx(r) {
+		name = "update"
+	}
+	w.Header().Add("Vary", "HX-Request")
+	h.render(w, status, t, name, v)
+}
+
+func htmx(r *http.Request) bool { return r.Header.Get("HX-Request") == "true" }
+
+func (h *Handler) pauseQueue(pause bool) http.HandlerFunc {
+	what := "resume the queue"
+	if pause {
+		what = "pause the queue"
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		h.done(w, r, "queue", what, "#notice", h.Queue.SetPaused(pause))
+	}
+}
+
+func (h *Handler) pauseJob(pause bool) http.HandlerFunc {
+	f, what := h.Queue.ResumeJobs, "resume the download"
+	if pause {
+		f, what = h.Queue.PauseJobs, "pause the download"
+	}
+	return func(w http.ResponseWriter, r *http.Request) {
+		_, err := f(r.PathValue("id"))
+		h.done(w, r, "queue", what, "#notice", err)
+	}
+}
+
+func (h *Handler) cancelJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	_, err := h.Queue.Cancel(id)
+	h.done(w, r, "queue", "remove the download", "#remove-"+id+"-notice", err)
+}
+
+func (h *Handler) deleteJob(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	id := r.PathValue("id")
+	_, err := h.Queue.Delete(id, r.PostFormValue("files") == "1")
+	h.done(w, r, "history", "remove the download from history", "#remove-"+id+"-notice", err)
+}
+
+// done answers an action on page: htmx requests get its new state, plain
+// forms a redirect to it. A failed htmx action's notice goes into the element
+// notice selects, which refreshes don't replace.
+func (h *Handler) done(w http.ResponseWriter, r *http.Request, page, what, notice string, err error) {
+	if err != nil {
+		h.Log.Error("web interface action failed", "action", what, "err", err)
+		msg := "Couldn’t " + what + ". The log has the details."
+		if !htmx(r) {
+			h.show(w, r, http.StatusInternalServerError, page, msg)
+			return
+		}
+		w.Header().Set("HX-Retarget", notice)
+		w.Header().Set("HX-Reswap", "innerHTML")
+		h.render(w, http.StatusInternalServerError, app, "notice", msg)
+		return
+	}
+	if htmx(r) {
+		h.show(w, r, http.StatusOK, page, "")
+		return
+	}
+	path := "/ui/"
+	if page == "history" {
+		path = "/ui/history"
+	}
+	http.Redirect(w, r, path, http.StatusSeeOther)
 }
 
 // Render fully before writing so a template error cannot send half a page.
