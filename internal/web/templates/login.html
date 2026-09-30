@@ -1,0 +1,30 @@
+{{define "bodyclass"}}auth{{end}}
+
+{{define "content" -}}
+<main class="auth-main">
+  <div class="card auth-card">
+    <div class="brand auth-brand">
+      <span class="mark">{{template "mark"}}</span>
+      <span class="wordmark">magnetowid</span>
+    </div>
+    <h1>Sign in</h1>
+    <p class="lead">Enter your magnetowid API key to continue.</p>
+    <form class="form" method="post" action="/ui/login">
+      <input type="text" name="username" value="magnetowid" autocomplete="username" hidden>
+      <label for="apikey">API key</label>
+      <input class="input" id="apikey" name="apikey" type="password" autocomplete="current-password" spellcheck="false" required autofocus
+        {{- if .Failed}} aria-invalid="true" aria-describedby="apikey-error"{{else}} aria-describedby="apikey-help"{{end}}>
+      {{- if .Failed}}
+      <p class="field-error" id="apikey-error">
+        <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm0 11.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2ZM10 5a1 1 0 0 0-1 1v5a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Z"/></svg>
+        <span>That key doesn’t match. Check <code>MAGNETOWID_API_KEY</code> and try again.</span>
+      </p>
+      {{- else}}
+      <p class="field-help" id="apikey-help">It’s <code>MAGNETOWID_API_KEY</code> in your settings.</p>
+      {{- end}}
+      <button class="btn btn-primary" type="submit">Sign in</button>
+    </form>
+  </div>
+  {{with .Version}}<p class="auth-foot">{{.}}</p>{{end}}
+</main>
+{{- end}}

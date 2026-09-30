@@ -1,0 +1,38 @@
+{{define "layout" -}}
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f6f6f8" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e0f12" media="(prefers-color-scheme: dark)">
+<title>{{.Title}}</title>
+<link rel="icon" href="/ui/static/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/ui/static/style.css">
+{{- block "head" .}}{{end}}
+</head>
+<body class="{{block "bodyclass" .}}{{end}}">
+{{template "content" .}}
+</body>
+</html>
+{{- end}}
+
+{{define "mark" -}}
+<svg viewBox="0 0 48 32" aria-hidden="true" focusable="false">
+  <rect class="mark-body" x="1" y="1" width="46" height="30" rx="6"/>
+  <rect x="7" y="5.5" width="34" height="1.5" fill="#e8457c"/>
+  <rect x="7" y="7" width="34" height="1.5" fill="#f5873a"/>
+  <rect x="7" y="8.5" width="34" height="1.5" fill="#f6c343"/>
+  <rect x="7" y="10" width="34" height="1.5" fill="#2bb3a3"/>
+  <rect class="mark-window" x="9" y="15" width="30" height="11" rx="5.5"/>
+  <g transform="translate(17 20.5)"><g class="reel">
+    <circle class="mark-reel" r="4"/>
+    <circle class="mark-window" cy="-2.1" r=".85"/><circle class="mark-window" cx="1.82" cy="1.05" r=".85"/><circle class="mark-window" cx="-1.82" cy="1.05" r=".85"/>
+  </g></g>
+  <g transform="translate(31 20.5)"><g class="reel">
+    <circle class="mark-reel" r="4"/>
+    <circle class="mark-window" cy="-2.1" r=".85"/><circle class="mark-window" cx="1.82" cy="1.05" r=".85"/><circle class="mark-window" cx="-1.82" cy="1.05" r=".85"/>
+  </g></g>
+</svg>
+{{- end}}

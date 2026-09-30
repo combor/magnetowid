@@ -161,6 +161,16 @@ curl 'http://localhost:8484/api?mode=queue&name=resume&value=JOB_ID&apikey=YOUR_
 and comma-separated IDs in `value` to pause jobs. Pauses survive restarts;
 interrupted downloads restart from the beginning when resumed.
 
+## Web interface
+
+Open `http://<host>:8484/` in a browser and sign in with the API key. The page
+shows the running download's progress and time left, the queued jobs in the
+order they will run, and paused or retrying jobs with their last error. It
+refreshes itself every second.
+
+Signing in lasts 30 days. Changing `MAGNETOWID_API_KEY` signs every browser
+out. Search for titles and manage downloads in Sonarr/Radarr.
+
 ## Correcting matches
 
 If magnetowid misses a series or film, or pairs the wrong episodes, add an
@@ -242,8 +252,8 @@ under **Settings → Download Clients**:
 
 ## Troubleshooting
 
-magnetowid provides APIs and has no separate web interface. Search for titles
-and manage downloads in Sonarr/Radarr.
+Search for titles and manage downloads in Sonarr/Radarr. The
+[web interface](#web-interface) shows magnetowid's download queue.
 
 | Problem | What to check |
 |---|---|

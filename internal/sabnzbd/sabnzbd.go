@@ -20,9 +20,6 @@ import (
 // version must be ≥ 0.7 for Sonarr/Radarr.
 const version = "4.5.1"
 
-// Assume 4 Mbit/s until ffmpeg reports progress.
-const bytesPerSecond = 4_000_000 / 8
-
 const maxBodyBytes = 4 << 20
 
 // Handler serves the SABnzbd API. Mount it at "/api".
@@ -238,7 +235,7 @@ func (h *Handler) queue(cat string) map[string]any {
 			(cat != "" && j.Category != cat) {
 			continue
 		}
-		total := estimatedSize(j)
+		total := j.EstimatedSize()
 		slots = append(slots, queueSlot{
 			ID:         j.ID,
 			Index:      len(slots),
@@ -304,20 +301,8 @@ func (h *Handler) history(cat string, start, limit int) map[string]any {
 	return map[string]any{"noofslots": total, "slots": slots}
 }
 
-func estimatedSize(j downloader.Job) int64 {
-	if j.Fraction > 0.01 && j.Bytes > 0 {
-		return int64(float64(j.Bytes) / j.Fraction)
-	}
-	return int64(j.Ref.Duration) * bytesPerSecond
-}
-
 func timeLeft(j downloader.Job) string {
-	var left time.Duration
-	if j.Status == downloader.StatusDownloading && j.Fraction > 0.01 {
-		elapsed := time.Since(j.Started)
-		left = time.Duration(float64(elapsed) * (1 - j.Fraction) / j.Fraction)
-	}
-	s := int(left.Seconds())
+	s := int(j.TimeLeft(time.Now()).Seconds())
 	return fmt.Sprintf("%d:%02d:%02d", s/3600, s/60%60, s%60)
 }
 
