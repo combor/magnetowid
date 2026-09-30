@@ -275,6 +275,9 @@ func TestOutagePausesProvider(t *testing.T) {
 			t.Errorf("job %s: status = %s, attempts = %d", j.Name, j.Status, j.Attempts)
 		}
 	}
+	if until, ok := q.Outages()["fake"]; !ok || time.Until(until) < 50*time.Minute {
+		t.Errorf("outages = %v, want fake held back for about an hour", q.Outages())
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.resolves != 1 {

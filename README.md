@@ -85,6 +85,12 @@ Use a host address reachable from your apps, and make sure both can read the
 download folder. See [Docker networking and shared downloads](docs/usage.md#docker-networking-and-shared-downloads)
 for container hostnames, volume mounts and Remote Path Mappings.
 
+## Web interface
+
+Open `http://<magnetowid-host>:8484/` and sign in with the API key to watch the
+download queue: the current download's progress, what's next, and any retries.
+See [Web interface](docs/usage.md#web-interface).
+
 ## Help and contributing
 
 - [Setup and configuration](docs/usage.md): installation options and settings.

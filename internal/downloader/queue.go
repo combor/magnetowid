@@ -83,6 +83,25 @@ type Job struct {
 	Paused bool `json:"paused,omitzero"`
 }
 
+// Assume 4 Mbit/s until ffmpeg reports progress.
+const bytesPerSecond = 4_000_000 / 8
+
+// EstimatedSize is the job's expected final size in bytes.
+func (j Job) EstimatedSize() int64 {
+	if j.Fraction > 0.01 && j.Bytes > 0 {
+		return int64(float64(j.Bytes) / j.Fraction)
+	}
+	return int64(j.Ref.Duration) * bytesPerSecond
+}
+
+// TimeLeft is zero until a running download has made some progress.
+func (j Job) TimeLeft(now time.Time) time.Duration {
+	if j.Status != StatusDownloading || j.Fraction <= 0.01 {
+		return 0
+	}
+	return time.Duration(float64(now.Sub(j.Started)) * (1 - j.Fraction) / j.Fraction)
+}
+
 const historyRetention = 30 * 24 * time.Hour
 
 const incompleteDir = ".incomplete"
@@ -186,6 +205,18 @@ func (q *Queue) Paused() bool {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	return q.paused
+}
+
+// Outages returns, by provider, when jobs held back by that provider's outage
+// may run again.
+func (q *Queue) Outages() map[string]time.Time {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make(map[string]time.Time, len(q.outages))
+	for name, o := range q.outages {
+		out[name] = o.until
+	}
+	return out
 }
 
 // SetPaused stops or resumes the queue. Resumed downloads restart from the beginning.
