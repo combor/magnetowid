@@ -2,6 +2,7 @@ package tvp
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -218,6 +219,67 @@ func TestTitleSearchAfterOverride(t *testing.T) {
 	}
 	if got := title(1); !slices.Equal(got, []string{"381138"}) {
 		t.Errorf("title search for S02E01 found %v, want the override's 381138", got)
+	}
+}
+
+// The Ranch (TVDB 5) is Ranczo, whose season 2 on TVP lists an unnumbered
+// trailer, 999. Its S00E01 and S02E01 aired on 2007-07-01.
+func TestSpecialsAndAirDates(t *testing.T) {
+	special := provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{pin(0, 1): "999"}}
+	aired := provider.Query{Kind: provider.Episode, AirDate: "2007-07-01"}
+	tests := []struct {
+		name string
+		ov   provider.SeriesOverride
+		q    provider.Query
+		want []string
+	}{
+		{"no automatic specials", provider.SeriesOverride{}, ep(0, 1), nil},
+		{"pinned special", special, ep(0, 1), []string{"999 S00E01"}},
+		{"season of pinned specials", special, ep(0, 0), []string{"999 S00E01"}},
+		{"air date", provider.SeriesOverride{}, aired, []string{"381150 S02E01"}},
+		{"air date with a pinned special", special, aired, []string{"381150 S02E01", "999 S00E01"}},
+		{"air date with nothing", special, provider.Query{Kind: provider.Episode, AirDate: "2007-07-02"}, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := overriddenProvider(t, &provider.Overrides{Series: map[int]provider.SeriesOverride{5: tt.ov}})
+			_, items, err := p.SearchTVDB(context.Background(), 5, tt.q)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, it := range items {
+				got = append(got, fmt.Sprintf("%s S%02dE%02d", it.ID, it.Season, it.Episode))
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("SearchTVDB found %v, want %v", got, tt.want)
+			}
+			// Found on TVP, the series is watched, even without the episode.
+			if !slices.Contains(p.watchedSeries.ids(), 5) {
+				t.Error("the series isn't watched")
+			}
+		})
+	}
+
+	// Title searches have neither TVDB's air dates nor, without an override
+	// for the title, its specials.
+	p := overriddenProvider(t, nil)
+	for _, q := range []provider.Query{{Season: 0, Episode: 1}, {AirDate: "2007-07-01"}} {
+		q.Kind, q.Title = provider.Episode, "Ranczo"
+		if items, err := p.Search(context.Background(), q); items != nil || err != nil {
+			t.Errorf("Search(%+v) = %v, %v", q, items, err)
+		}
+	}
+}
+
+func TestFeedOffersPinnedSpecials(t *testing.T) {
+	p := overriddenProvider(t, &provider.Overrides{Series: map[int]provider.SeriesOverride{
+		5: {Episodes: map[provider.EpisodeNumber]string{pin(0, 1): "999"}},
+	}})
+	p.watch(5, "The Ranch")
+	p.rebuildSeries(context.Background())
+	if got, want := describe(feedReleases(p)), "381054 The Ranch S01E13, 381150 The Ranch S02E01, 999 The Ranch S00E01"; got != want {
+		t.Errorf("feed = %s; want %s", got, want)
 	}
 }
 

@@ -169,7 +169,8 @@ func TestCheckSeries(t *testing.T) {
 		{"special season", 1, provider.SeriesOverride{Seasons: []provider.SeasonRule{{Season: 0}}}, "season 0"},
 		{"negative site season", 1, provider.SeriesOverride{Seasons: []provider.SeasonRule{{Season: 1, SiteSeason: -1}}}, "negative"},
 		{"two rules", 1, provider.SeriesOverride{Seasons: []provider.SeasonRule{{Season: 1}, {Season: 1, Offset: 2}}}, "two rules"},
-		{"special episode", 1, provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{ep(0, 1): "abc"}}, "S00E01"},
+		{"special episode", 1, provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{ep(0, 1): "abc"}}, ""},
+		{"episode 0", 1, provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{ep(0, 0): "abc"}}, "S00E00"},
 		{"bad episode ID", 1, provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{ep(1, 1): "12"}}, "S01E01: not an ID"},
 		{"two pins", 1, provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{
 			ep(1, 2): "abc", ep(1, 1): "https://site.example/abc"}}, "S01E01 and S01E02 both name abc"},

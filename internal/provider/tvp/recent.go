@@ -182,8 +182,8 @@ func (p *Provider) recentEpisodes(ctx context.Context, tvdbID int, now time.Time
 		return nil, err
 	}
 	var out []provider.Release
-	for _, e := range s.episodes {
-		if e.aired.Before(now.Add(-recentWindow)) || e.aired.After(now.Add(airDateSlack)) {
+	for _, e := range s.all() {
+		if e.aired.Before(now.Add(-recentWindow)) || e.aired.After(now.Add(airDateSlack)) || !placed(ov, e) {
 			continue
 		}
 		m, err := p.searchTitles(ctx, s, ov, provider.Query{Kind: provider.Episode, Season: e.season, Episode: e.episode})

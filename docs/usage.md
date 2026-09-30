@@ -122,6 +122,10 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
 Test both connections. An empty feed produces a placeholder to pass the
 indexer test; it cannot be downloaded.
 
+Sonarr can search for specials and, for daily series, episodes by air date.
+Releases always use TVDB's season and episode numbers, e.g. `S00E01` or
+`S2026E187`, which Sonarr accepts for daily series too.
+
 ### New episodes and films (RSS)
 
 For sites with RSS support, magnetowid watches titles after Sonarr or Radarr
@@ -193,7 +197,7 @@ A series override has one or more of:
 | `titles` | The site's titles to search, instead of those magnetowid finds. |
 | `id` | The site's series, among the search results for the titles, if several share a title. |
 | `seasons` | Rules placing TVDB seasons in the site's numbering: TVDB's episode *n* is the site's episode *n* + `offset` in season `site_season`. `site_season` 0 accepts any season, if only one has that number. |
-| `episodes` | Single TVDB episodes, such as `S01E05`, each with the site's episode ID. These win over `seasons`, and no other episode matches a pinned one. |
+| `episodes` | Single TVDB episodes, such as `S01E05` or the special `S00E01`, each with the site's episode ID. These win over `seasons`, and no other episode matches a pinned one. |
 
 A film override has `titles` to search instead of Radarr's, an `id`, or both.
 The site's film with that `id`, found by searching the titles, is used even

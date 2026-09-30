@@ -52,6 +52,9 @@ func TestMatchOverrides(t *testing.T) {
 		"S05E02=s4e2")
 	// Specials have no number.
 	check("before the first episode", tv, eps, provider.SeriesOverride{Seasons: []provider.SeasonRule{{Season: 5, Offset: -1}}})
+	check("pinned special", append(tv, tvdb(0, 3, "Festive Special", "")), eps,
+		provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{pin(0, 3): "special"}},
+		"S00E03=special", "S05E01=s5e1")
 }
 
 func TestSearchTVDBOverrides(t *testing.T) {

@@ -42,8 +42,20 @@ type Query struct {
 	Kind    Kind
 	Title   string // the *arr's q, without a trailing year for movies
 	Year    int    // 0 = unknown
-	Season  int
-	Episode int // 0 = whole season
+	Season  int    // 0 holds specials
+	Episode int    // 0 = whole season
+	// A daily series' local air date, e.g. "2026-09-29", instead of Season
+	// and Episode.
+	AirDate string
+}
+
+// Wants reports whether q asks for a TVDB episode aired on airDate, a local
+// date such as "2026-09-29" or "" if unknown.
+func (q Query) Wants(season, episode int, airDate string) bool {
+	if q.AirDate != "" {
+		return airDate == q.AirDate
+	}
+	return season == q.Season && (q.Episode == 0 || episode == q.Episode)
 }
 
 type Item struct {

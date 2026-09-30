@@ -44,7 +44,12 @@ func (p *Provider) SearchTVDB(ctx context.Context, tvdbID int, q provider.Query)
 		p.log.Warn("TVDB lookup failed; Sonarr will search by title", "tvdbid", tvdbID, "err", err)
 		return "", nil, nil
 	}
-	m, err := p.searchTitles(ctx, s, ov, q)
+	var m titleMatch
+	if q.AirDate != "" {
+		m, err = p.searchAired(ctx, s, ov, q)
+	} else {
+		m, err = p.searchTitles(ctx, s, ov, q)
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -84,20 +89,9 @@ type titleMatch struct {
 }
 
 // Suppress per-search logs here: feed rebuilds call this for every recent episode.
-// The override's titles replace the Polish titles and Sonarr's.
 func (p *Provider) searchTitles(ctx context.Context, s series, ov provider.SeriesOverride, q provider.Query) (titleMatch, error) {
 	var m titleMatch
-	titles := append(slices.Clone(s.polish), s.title)
-	if len(ov.Titles) > 0 {
-		titles = ov.Titles
-	}
-	tried := map[string]bool{}
-	for _, title := range titles {
-		norm := provider.NormalizeTitle(title)
-		if norm == "" || tried[norm] {
-			continue
-		}
-		tried[norm] = true
+	for _, title := range searchable(s, ov) {
 		serial, ok, err := p.findSerial(ctx, title, ov.ID)
 		if err != nil {
 			return titleMatch{}, err
@@ -118,16 +112,87 @@ func (p *Provider) searchTitles(ctx context.Context, s series, ov provider.Serie
 	return m, nil
 }
 
+// Return the titles to search TVP for, each once. The override's titles
+// replace the Polish titles and Sonarr's.
+func searchable(s series, ov provider.SeriesOverride) []string {
+	titles := append(slices.Clone(s.polish), s.title)
+	if len(ov.Titles) > 0 {
+		titles = ov.Titles
+	}
+	var out []string
+	tried := map[string]bool{}
+	for _, title := range titles {
+		norm := provider.NormalizeTitle(title)
+		if norm == "" || tried[norm] {
+			continue
+		}
+		tried[norm] = true
+		out = append(out, title)
+	}
+	return out
+}
+
+// A daily series' search gives an air date. Search for each TVDB episode
+// aired that day, in TVDB's numbering. Without one, still find the serial,
+// which a search for a missing episode watches.
+func (p *Provider) searchAired(ctx context.Context, s series, ov provider.SeriesOverride, q provider.Query) (titleMatch, error) {
+	var aired titleMatch
+	searched := false
+	for _, e := range s.all() {
+		if !q.Wants(e.season, e.episode, e.date) || !placed(ov, e) {
+			continue
+		}
+		searched = true
+		m, err := p.searchTitles(ctx, s, ov, provider.Query{Kind: q.Kind, Season: e.season, Episode: e.episode})
+		if err != nil {
+			return titleMatch{}, err
+		}
+		aired.items = append(aired.items, m.items...)
+		aired.serialFound = aired.serialFound || m.serialFound
+		if m.tvpTitle != "" {
+			aired.tvpTitle = m.tvpTitle
+		}
+	}
+	if searched {
+		return aired, nil
+	}
+	for _, title := range searchable(s, ov) {
+		_, ok, err := p.findSerial(ctx, title, ov.ID)
+		if err != nil {
+			return titleMatch{}, err
+		}
+		if ok {
+			aired.serialFound = true
+			break
+		}
+	}
+	return aired, nil
+}
+
+// Report whether TVP could have the episode: only overrides place specials.
+func placed(ov provider.SeriesOverride, e tvdbEpisode) bool {
+	_, ok := ov.Target(e.season, e.episode)
+	return e.season != 0 || ok
+}
+
 type series struct {
 	title    string   // Sonarr's
 	polish   []string // Wikidata's, possibly none
 	episodes []tvdbEpisode
+	// Season 0, kept apart: only overrides place specials, and their
+	// numbers would confuse checks on the others'.
+	specials []tvdbEpisode
 }
 
-// Excludes specials.
+// all returns the episodes, then the specials.
+func (s *series) all() []tvdbEpisode {
+	return slices.Concat(s.episodes, s.specials)
+}
+
 type tvdbEpisode struct {
 	season, episode int
 	aired           time.Time // zero if not yet scheduled
+	date            string    // local air date, e.g. "2026-09-29"; "" if unknown
 	// Absolute number agreed by TVDB's number and numeric title;
 	// zero if unknown, conflicting if they disagree.
 	number int
@@ -222,6 +287,7 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (s series, noPolis
 			EpisodeNumber         int    `json:"episodeNumber"`
 			AbsoluteEpisodeNumber int    `json:"absoluteEpisodeNumber"`
 			Title                 string `json:"title"`
+			AirDate               string `json:"airDate"`
 			AirDateUtc            string `json:"airDateUtc"`
 		} `json:"episodes"`
 	}
@@ -233,16 +299,17 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (s series, noPolis
 	}
 	s = series{title: show.Title}
 	for _, e := range show.Episodes {
-		if e.SeasonNumber <= 0 || e.EpisodeNumber <= 0 {
-			continue // specials
+		if e.SeasonNumber < 0 || e.EpisodeNumber <= 0 {
+			continue
 		}
 		aired, _ := time.Parse(time.RFC3339, e.AirDateUtc)
-		s.episodes = append(s.episodes, tvdbEpisode{
-			season:  e.SeasonNumber,
-			episode: e.EpisodeNumber,
-			aired:   aired,
-			number:  agreed(max(e.AbsoluteEpisodeNumber, 0), titleNumber(e.Title)),
-		})
+		ep := tvdbEpisode{season: e.SeasonNumber, episode: e.EpisodeNumber, aired: aired, date: e.AirDate}
+		if e.SeasonNumber == 0 {
+			s.specials = append(s.specials, ep)
+			continue
+		}
+		ep.number = agreed(max(e.AbsoluteEpisodeNumber, 0), titleNumber(e.Title))
+		s.episodes = append(s.episodes, ep)
 	}
 
 	// Fall back to IMDb when Wikidata has no TVDB match.
