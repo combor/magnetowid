@@ -25,6 +25,10 @@ Titles and numbers never pair an iPlayer episode that aired over a year
 before TVDB's, as a remake's original would. iPlayer dates box sets by their
 release, which can precede TVDB's weekly air dates by weeks.
 
+Specials (TVDB season 0) pair by title or air date, as *The Star Beast* is
+TVDB's S00E01, but never by iPlayer's numbering. Sonarr's searches for a
+daily series' episode, by air date, find the TVDB episodes aired that day.
+
 Releases use Sonarr's title and TVDB's numbering. TVDB's qualifiers "(2023)"
 and "(UK)" are dropped, so *Doctor Who (2023)* finds iPlayer's *Doctor Who*;
 other countries' remain, so *The Traitors (US)* finds *The Traitors US*.
@@ -70,9 +74,6 @@ The feeds offer watched series' episodes that iPlayer made available within
 in the background once 10 minutes old or when a series is added; the first
 sync after startup returns a placeholder. Releases are dated when first found,
 so Sonarr's RSS cutoff cannot hide episodes of newly watched series.
-
-Specials (TVDB season 0) are offered through RSS only: magnetowid does not
-answer Sonarr's searches for specials.
 
 ## Streams
 

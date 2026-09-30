@@ -69,6 +69,18 @@ Limitations:
 - TVDB's *Klan* ends in 2011 and *Barwy szczęścia* in April 2024. Sonarr cannot
   request later episodes until TVDB adds them.
 
+## Specials and daily series
+
+TVP lists trailers and extras without episode numbers, so magnetowid never
+matches TVDB's specials (season 0) itself. Pin them in an
+[override](../../../docs/usage.md#correcting-matches), e.g. `"S00E01"` with
+the TVP episode's ID; searches and the new-episode feed then offer them.
+
+Sonarr searches for a daily series' episode by air date. magnetowid finds the
+TVDB episodes aired that day, then matches them by number as above. Title
+searches, which lack TVDB's air dates, find them only for a series with an
+override.
+
 ## New episodes
 
 TVP has no new-episode feed. A successful TVDB series match adds the series to

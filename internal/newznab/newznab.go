@@ -99,19 +99,11 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 		title, year := splitYear(text)
 		query = provider.Query{Kind: provider.Movie, Title: title, Year: year}
 	} else {
-		season, err := strconv.Atoi(q.Get("season"))
-		if err != nil || season <= 0 {
+		var ok bool
+		if query, ok = episodeQuery(text, q.Get("season"), q.Get("ep")); !ok {
 			writeXML(w, h.feed(p, nil))
 			return
 		}
-		episode := 0
-		if ep := q.Get("ep"); ep != "" {
-			if episode, err = strconv.Atoi(ep); err != nil || episode <= 0 {
-				writeXML(w, h.feed(p, nil)) // daily "MM/dd" is not supported
-				return
-			}
-		}
-		query = provider.Query{Kind: provider.Episode, Title: text, Season: season, Episode: episode}
 	}
 
 	var found []provider.Item
@@ -133,7 +125,7 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 	}
 	pg, res := h.probePage(r.Context(), start, p, releases, off, lim)
 	h.Log.Info("search", "provider", p.Name(), "kind", query.Kind, "title", query.Title, "tvdbid", tvdbID,
-		"year", query.Year, "season", query.Season, "episode", query.Episode, "offset", off, "results", len(pg),
+		"year", query.Year, "season", query.Season, "episode", query.Episode, "airdate", query.AirDate, "offset", off, "results", len(pg),
 		"unavailable", res.unavailable, "unreadable", res.unreadable)
 
 	items := make([]item, 0, len(pg))
@@ -141,6 +133,32 @@ func (h *Handler) search(w http.ResponseWriter, r *http.Request, p provider.Prov
 		items = append(items, h.release(r, p, query, rel.Item, rel.info))
 	}
 	writeXML(w, h.feed(p, items))
+}
+
+var dailyEpisode = regexp.MustCompile(`^(\d\d)/(\d\d)$`)
+
+// Sonarr asks for specials as season 00, and for a daily series' episode by
+// its air date, as season=2026&ep=09/29. ok=false answers with no results.
+func episodeQuery(title, season, ep string) (q provider.Query, ok bool) {
+	s, err := strconv.Atoi(season)
+	if err != nil || s < 0 {
+		return provider.Query{}, false
+	}
+	q = provider.Query{Kind: provider.Episode, Title: title, Season: s}
+	if ep == "" {
+		return q, true
+	}
+	if m := dailyEpisode.FindStringSubmatch(ep); m != nil {
+		date := fmt.Sprintf("%04d-%s-%s", s, m[1], m[2])
+		if _, err := time.Parse(time.DateOnly, date); err != nil {
+			return provider.Query{}, false
+		}
+		return provider.Query{Kind: provider.Episode, Title: title, AirDate: date}, true
+	}
+	if q.Episode, err = strconv.Atoi(ep); err != nil || q.Episode <= 0 {
+		return provider.Query{}, false
+	}
+	return q, true
 }
 
 // The unparseable placeholder keeps empty feeds valid for indexer tests and

@@ -33,14 +33,16 @@ var shows = map[string]string{
 	"/shows/7":      hundredsShow(soapNow),
 }
 
-// Recent fixture episodes: S01E13 (due in 12 hours), S02E01, and paid S02E03.
+// Recent fixture episodes: S00E01, S01E13 (due in 12 hours), S02E01, and
+// paid S02E03. Local air dates, which only date searches read, are fixed:
+// S00E01 and S02E01 share one.
 func ranchShow(now time.Time) string {
 	aired := func(d time.Duration) string { return now.Add(d).UTC().Format(time.RFC3339) }
 	return fmt.Sprintf(`{"tvdbId":5,"title":"The Ranch","episodes":[
-		{"seasonNumber":0,"episodeNumber":1,"airDateUtc":%q},
+		{"seasonNumber":0,"episodeNumber":1,"airDate":"2007-07-01","airDateUtc":%q},
 		{"seasonNumber":1,"episodeNumber":1,"airDateUtc":%q},
 		{"seasonNumber":1,"episodeNumber":13,"airDateUtc":%q},
-		{"seasonNumber":2,"episodeNumber":1,"airDateUtc":%q},
+		{"seasonNumber":2,"episodeNumber":1,"airDate":"2007-07-01","airDateUtc":%q},
 		{"seasonNumber":2,"episodeNumber":2,"airDateUtc":%q},
 		{"seasonNumber":2,"episodeNumber":3,"airDateUtc":%q},
 		{"seasonNumber":2,"episodeNumber":4}]}`,

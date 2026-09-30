@@ -47,7 +47,8 @@ func checkSeries(tvdbID int, o provider.SeriesOverride, site provider.Overridabl
 			return cmp.Or(cmp.Compare(a.Season, b.Season), cmp.Compare(a.Episode, b.Episode))
 		})
 		for _, n := range numbers {
-			if n.Season < 1 || n.Episode < 1 {
+			// Season 0 holds specials.
+			if n.Season < 0 || n.Episode < 1 {
 				return provider.SeriesOverride{}, invalid("episodes: %s is not a numbered TVDB episode", n)
 			}
 			id, err := site.ParseID(o.Episodes[n])

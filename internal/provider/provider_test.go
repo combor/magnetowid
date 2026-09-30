@@ -109,6 +109,32 @@ func TestSeriesOverrideTarget(t *testing.T) {
 	}
 }
 
+func TestQueryWants(t *testing.T) {
+	tests := []struct {
+		q               Query
+		season, episode int
+		aired           string
+		want            bool
+	}{
+		{Query{Season: 2, Episode: 1}, 2, 1, "2026-09-29", true},
+		{Query{Season: 2, Episode: 1}, 2, 2, "2026-09-29", false},
+		{Query{Season: 2}, 2, 7, "", true},
+		{Query{Season: 2}, 1, 7, "", false},
+		{Query{Season: 0, Episode: 1}, 0, 1, "", true},
+		{Query{Season: 0}, 1, 1, "", false},
+		// A date asks for whatever aired that day, specials included.
+		{Query{AirDate: "2026-09-29"}, 42, 155, "2026-09-29", true},
+		{Query{AirDate: "2026-09-29"}, 0, 3, "2026-09-29", true},
+		{Query{AirDate: "2026-09-29"}, 42, 156, "2026-09-30", false},
+		{Query{AirDate: "2026-09-29"}, 0, 0, "", false},
+	}
+	for _, tt := range tests {
+		if got := tt.q.Wants(tt.season, tt.episode, tt.aired); got != tt.want {
+			t.Errorf("%+v.Wants(%d, %d, %q) = %v, want %v", tt.q, tt.season, tt.episode, tt.aired, got, tt.want)
+		}
+	}
+}
+
 func TestEpisodeNumberJSON(t *testing.T) {
 	var got map[EpisodeNumber]string
 	if err := json.Unmarshal([]byte(`{"S01E05":"a","s10e123":"b"}`), &got); err != nil {
