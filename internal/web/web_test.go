@@ -31,7 +31,7 @@ func (fakeProvider) Search(context.Context, provider.Query) ([]provider.Item, er
 	return nil, nil
 }
 
-// Resolving "gone" fails for good.
+// Resolving "gone" fails permanently.
 func (fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, error) {
 	if id == "gone" {
 		return provider.Stream{}, provider.ErrUnavailable
@@ -253,7 +253,7 @@ func TestQueuePage(t *testing.T) {
 	if r.header.Get("Cache-Control") != "no-store" || !strings.Contains(r.header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Errorf("queue page headers %v", r.header)
 	}
-	// htmx would move focus to the first autofocus after every refresh.
+	// htmx focuses the first autofocus element after every swap.
 	if strings.Contains(r.body, "autofocus") || !strings.Contains(r.body, `class="confirm-notice"`) {
 		t.Errorf("queue page confirmations:\n%s", r.body)
 	}
@@ -276,7 +276,7 @@ func TestQueueActions(t *testing.T) {
 	id := add(t, q, "Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-FAKE", "1")
 	other := add(t, q, "Ranczo.S02E02.1080p.WEB-DL.AAC.H.264-FAKE", "2")
 
-	// Plain forms go back to the page.
+	// Plain forms redirect to the page.
 	for _, tc := range []struct {
 		path  string
 		check func() bool
@@ -293,7 +293,7 @@ func TestQueueActions(t *testing.T) {
 		}
 	}
 
-	// htmx gets the page's new state at once.
+	// htmx requests get the new state.
 	r := post(t, srv, "/ui/queue/pause", nil, "Cookie", cookie, "HX-Request", "true")
 	if r.status != http.StatusOK || !strings.HasPrefix(r.body, "<title>Paused — magnetowid</title>") ||
 		!strings.Contains(r.body, "Resume<span class=\"wide\"> queue</span>") || strings.Contains(r.body, "<html") {
@@ -303,7 +303,7 @@ func TestQueueActions(t *testing.T) {
 	if r.status != http.StatusOK || !strings.Contains(r.body, `action="/ui/queue/`+id+`/resume"`) {
 		t.Errorf("htmx job pause = %d %s", r.status, r.body)
 	}
-	// A job that has gone is not an error.
+	// An unknown job is not an error.
 	if r := post(t, srv, "/ui/queue/SABnzbd_nzo_gone/delete", nil, "Cookie", cookie, "HX-Request", "true"); r.status != http.StatusOK {
 		t.Errorf("removing an unknown job = %d %s", r.status, r.body)
 	}
@@ -318,7 +318,7 @@ func TestQueueActions(t *testing.T) {
 		t.Errorf("signed-out htmx resume = %d, HX-Redirect %q", r.status, r.header.Get("HX-Redirect"))
 	}
 
-	// A failed save shows a notice outside the refreshing part.
+	// A failed save gets a notice that refreshes don't replace.
 	db.Close()
 	r = post(t, srv, "/ui/queue/resume", nil, "Cookie", cookie, "HX-Request", "true")
 	if r.status != http.StatusInternalServerError || r.header.Get("HX-Retarget") != "#notice" || r.header.Get("HX-Reswap") != "innerHTML" ||
@@ -329,7 +329,7 @@ func TestQueueActions(t *testing.T) {
 	if r.status != http.StatusInternalServerError || !strings.Contains(r.body, "<html") || !strings.Contains(r.body, "Couldn’t resume the queue.") {
 		t.Errorf("failed resume = %d %s", r.status, r.body)
 	}
-	// The open confirmation would hide a notice at the bottom of the page.
+	// A failed removal's notice goes into its confirmation.
 	r = post(t, srv, "/ui/queue/"+id+"/delete", nil, "Cookie", cookie, "HX-Request", "true")
 	if r.status != http.StatusInternalServerError || r.header.Get("HX-Retarget") != "#remove-"+id+"-notice" ||
 		!strings.Contains(r.body, "Couldn’t remove the download.") {
@@ -493,7 +493,7 @@ func TestQueueView(t *testing.T) {
 		t.Errorf("state %q, title %q, version %q", v.State(), v.Title(), v.Version)
 	}
 
-	// A paused download is shown where it will be once it has stopped.
+	// A download stopping for a pause is shown as queued.
 	stopping := running
 	stopping.Paused = true
 	for _, v := range []queueView{
@@ -562,7 +562,7 @@ func TestRenderStates(t *testing.T) {
 		want []string
 		not  []string
 	}{
-		{newHistoryView(nil, false, "", now), []string{"No finished downloads", "for up to 30 days"}, nil},
+		{newHistoryView(nil, false, "", now), []string{"No finished downloads", "for 30 days"}, nil},
 		{newHistoryView([]downloader.Job{done}, false, "", now), []string{"Cube", "/downloads/movies/Cube", "hasn’t imported it yet"}, nil},
 		{newHistoryView([]downloader.Job{gone}, false, "", now), []string{"&lt;b&gt;boom&lt;/b&gt;", `action="/ui/history/f1/delete"`},
 			[]string{`name="files"`, "hasn’t imported"}},

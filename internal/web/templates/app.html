@@ -1,4 +1,4 @@
-{{/* What the queue and history pages share. */}}
+{{/* Shared by the queue and history pages. */}}
 
 {{/* Refreshes keep a failed removal's notice while its confirmation is open. */}}
 {{define "head"}}
@@ -44,9 +44,8 @@
   </div>
 </header>
 
-{{/* Actions swap in the page's new state. They queue with the refreshes, so responses land in order and none brings back an
-     older state. Nothing is cancelled: the bundled htmx frees the queue when a cancelled request ends, while its
-     replacement still runs. */}}
+{{/* Actions queue with refreshes so responses land in order. Nothing is cancelled: the bundled htmx releases the queue
+     when a cancelled request ends, while its replacement still runs. */}}
 <main class="container" hx-target:inherited="#app" hx-swap:inherited="innerMorph" hx-sync:inherited="#app:queue all">
   <h1 class="visually-hidden">{{if eq .Page "history"}}Download history{{else}}Download queue{{end}}</h1>
   <div class="toolbar">
@@ -72,15 +71,15 @@
 <p class="row-error" title="{{.}}">{{template "icon-alert"}}<span>{{.}}</span></p>
 {{- end}}
 
-{{/* Asks before removing a job; the page supplies the question and the form. */}}
+{{/* Opens the job's removal confirmation, which each page defines. */}}
 {{define "remove-button" -}}
 <button class="icon-btn icon-btn-danger" type="button" popovertarget="remove-{{.ID}}" aria-label="Remove {{.Label}}" title="Remove">{{template "icon-trash"}}</button>
 {{- end}}
 
-{{/* A failed removal shows here: a notice below would be hidden by the open confirmation. */}}
+{{/* A failed removal's notice: the page's own would be under the open confirmation. */}}
 {{define "remove-notice"}}<div class="confirm-notice" id="remove-{{.ID}}-notice" aria-live="assertive"></div>{{end}}
 
-{{/* No autofocus: htmx focuses the first one after every refresh. */}}
+{{/* No autofocus: htmx focuses the first autofocus element after every swap. */}}
 {{define "keep-button" -}}
 <button class="btn btn-quiet" type="button" popovertarget="remove-{{.ID}}" popovertargetaction="hide">Keep</button>
 {{- end}}

@@ -1,5 +1,5 @@
-// Package web serves the browser interface: a sign-in page, and live views of
-// the download queue and history that can pause, resume and remove downloads.
+// Package web serves the browser interface: sign-in, and live queue and
+// history pages with download controls.
 //
 // static/htmx-4.0.0.min.js is dist/htmx.min.js from the htmx.org 4.0.0 npm
 // package, under the Zero-Clause BSD license.
@@ -203,8 +203,8 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 	h.show(w, r, http.StatusOK, "history", "")
 }
 
-// show renders a page with an optional notice, or for htmx only the part of
-// it that refreshes.
+// show renders page with an optional notice. htmx requests get only the
+// refreshing part.
 func (h *Handler) show(w http.ResponseWriter, r *http.Request, status int, page, notice string) {
 	jobs, paused, now := h.Queue.Jobs(), h.Queue.Paused(), time.Now()
 	var t *template.Template
@@ -249,7 +249,6 @@ func (h *Handler) pauseJob(pause bool) http.HandlerFunc {
 	}
 }
 
-// A download that finished meanwhile stays in history.
 func (h *Handler) cancelJob(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	_, err := h.Queue.Cancel(id)
@@ -263,10 +262,9 @@ func (h *Handler) deleteJob(w http.ResponseWriter, r *http.Request) {
 	h.done(w, r, "history", "remove the download from history", "#remove-"+id+"-notice", err)
 }
 
-// done answers an action on page. htmx gets the page's new state at once and
-// plain forms go back to the page. Unknown jobs are not errors: the page
-// shows they have gone. For htmx, a failure's notice goes into the element
-// notice selects.
+// done answers an action on page: htmx requests get its new state, plain
+// forms a redirect to it. A failed htmx action's notice goes into the element
+// notice selects, which refreshes don't replace.
 func (h *Handler) done(w http.ResponseWriter, r *http.Request, page, what, notice string, err error) {
 	if err != nil {
 		h.Log.Error("web interface action failed", "action", what, "err", err)
@@ -275,7 +273,6 @@ func (h *Handler) done(w http.ResponseWriter, r *http.Request, page, what, notic
 			h.show(w, r, http.StatusInternalServerError, page, msg)
 			return
 		}
-		// Somewhere the next refresh keeps it.
 		w.Header().Set("HX-Retarget", notice)
 		w.Header().Set("HX-Reswap", "innerHTML")
 		h.render(w, http.StatusInternalServerError, app, "notice", msg)

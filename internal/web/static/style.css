@@ -26,7 +26,7 @@
   --warn-border: #f3d9a4;
   --danger: #b42318;
   --danger-soft: #fdecea;
-  --danger-solid: #c42b1f; /* under white text */
+  --danger-solid: #c42b1f; /* behind white text */
   --danger-solid-hover: #a82218;
   --ok: #0b7568;
   --ok-soft: #ddf4ef;
@@ -374,7 +374,7 @@ code {
   padding: 32px 20px calc(64px + env(safe-area-inset-bottom));
 }
 
-/* Page tabs and the page's own controls */
+/* Tabs and page controls */
 
 .toolbar {
   display: flex;
@@ -758,8 +758,7 @@ code {
 
 .added { margin-left: 2px; }
 
-/* Every fact starts with a dot, and the clip hides the one that starts each
-   line. */
+/* Each fact starts with a dot; the clip hides the dot that starts a line. */
 .facts {
   display: inline-flex;
   flex-wrap: wrap;
@@ -830,7 +829,7 @@ code {
   color: var(--text-muted);
 }
 
-/* Asking before removing */
+/* Removal confirmation */
 
 .confirm {
   width: min(420px, calc(100vw - 32px));
@@ -847,7 +846,7 @@ code {
   transition: opacity 0.2s ease, transform 0.2s ease, overlay 0.2s allow-discrete, display 0.2s allow-discrete;
 }
 
-/* Only while open: a display here would show closed popovers. */
+/* display on .confirm would override the display: none of closed popovers. */
 .confirm:popover-open {
   display: grid;
   gap: 6px;
@@ -944,14 +943,14 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* The button says whether the files go too. */
+/* The submit label follows the files checkbox. */
 .if-deleted { display: none; }
 .confirm:has(:checked) .if-kept { display: none; }
 .confirm:has(:checked) .if-deleted { display: inline; }
 .confirm:has(:checked) .btn-strong { background: var(--danger-solid); color: #fff; }
 .confirm:has(:checked) .btn-strong:hover { background: var(--danger-solid-hover); }
 
-/* A failed action */
+/* Failure notices */
 
 .notice {
   position: fixed;
@@ -1118,7 +1117,7 @@ code {
     transition: none;
   }
 
-  /* Hiding a notice is not motion. */
+  /* Keep hiding notices: visibility isn't motion. */
   .notice .toast { animation: toast-hide 8s step-end forwards !important; }
 }
 
@@ -1136,7 +1135,7 @@ code {
 
   .hero { padding: 20px 18px; }
 
-  /* The controls share the eyebrow's line; the chips go below. */
+  /* Controls on the eyebrow's line, chips below. */
   .hero-tools { display: contents; }
   .hero .actions { order: 1; margin: -6px -8px -6px auto; }
   .hero .chips { order: 2; flex-basis: 100%; }
@@ -1160,7 +1159,7 @@ code {
   .row .actions { align-self: start; margin: 4px -4px 0 0; }
   .pos { display: none; }
 
-  /* A sheet at the bottom, within thumb reach. */
+  /* Bottom sheet. */
   .confirm {
     width: auto;
     margin: auto 10px calc(10px + env(safe-area-inset-bottom));

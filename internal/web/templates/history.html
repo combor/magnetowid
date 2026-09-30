@@ -44,12 +44,12 @@
     </li>
     {{- end}}
   </ol>
-  <p class="footnote">Finished downloads are kept for {{.KeptDays}} days, or until Sonarr or Radarr removes them.</p>
+  <p class="footnote">Finished downloads stay for {{.KeptDays}} days unless Sonarr or Radarr removes them first.</p>
   {{- else}}
   <section class="card empty" id="empty">
     <span class="mark mark-xl">{{template "mark"}}</span>
     <h2>No finished downloads</h2>
-    <p>Finished downloads show up here until Sonarr or Radarr imports them, for up to {{.KeptDays}} days.</p>
+    <p>Finished downloads stay here for {{.KeptDays}} days unless Sonarr or Radarr removes them first.</p>
   </section>
   {{- end}}
 {{- end}}

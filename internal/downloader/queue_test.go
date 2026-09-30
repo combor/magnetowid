@@ -444,7 +444,7 @@ func TestCancel(t *testing.T) {
 		t.Errorf("cancelling an unknown job = %v, %v", ok, err)
 	}
 
-	// A job that finished before the cancel stays for Sonarr/Radarr to import.
+	// A finished job stays for import.
 	q = startQueue(t, &fakeProvider{}, &fakeEngine{})
 	done := waitFinished(t, q, add(t, q, "c", "tv", 0, nzb.Ref{Provider: "fake", ID: "c"}))
 	if ok, err := q.Cancel(done.ID); ok || err != nil {

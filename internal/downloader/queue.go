@@ -312,9 +312,8 @@ func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
 	return q.discard(id, deleteFiles, false)
 }
 
-// Cancel deletes a job that has not finished, so one that finishes as it is
-// cancelled stays in history to be imported. It returns false for unknown and
-// finished jobs.
+// Cancel deletes an unfinished job. It returns false for unknown and finished
+// jobs, which stay in history for import.
 func (q *Queue) Cancel(id string) (bool, error) {
 	return q.discard(id, false, true)
 }

@@ -87,10 +87,9 @@ for container hostnames, volume mounts and Remote Path Mappings.
 
 ## Web interface
 
-Open `http://<magnetowid-host>:8484/` and sign in with the API key to watch and
-manage downloads: the current download's progress, what's next, any retries,
-and what has finished. Pause, resume or remove downloads, and delete finished
-ones' files. See [Web interface](docs/usage.md#web-interface).
+Open `http://<magnetowid-host>:8484/` and sign in with the API key to see the
+queue and history, and to pause, resume or remove downloads. See
+[Web interface](docs/usage.md#web-interface).
 
 ## Help and contributing
 

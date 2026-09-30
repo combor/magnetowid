@@ -11,7 +11,7 @@ import (
 	"github.com/combor/magnetowid/internal/downloader"
 )
 
-// chrome is what every page shows about the queue as a whole.
+// chrome is the queue summary every page shows.
 type chrome struct {
 	Version  string
 	Page     string // queue or history
@@ -63,7 +63,7 @@ func (c chrome) StateLabel() string {
 	return "Idle"
 }
 
-// Refresh is where the page gets its changing part.
+// Refresh is the URL the page polls.
 func (c chrome) Refresh() string {
 	if c.Page == "history" {
 		return "/ui/history"
@@ -71,7 +71,7 @@ func (c chrome) Refresh() string {
 	return "/ui/queue"
 }
 
-// Every is how often the page refreshes. History changes less often.
+// Every is the page's poll interval.
 func (c chrome) Every() string {
 	if c.Page == "history" {
 		return "5s"
@@ -98,7 +98,7 @@ type jobView struct {
 	Provider string
 	Priority string // empty for normal priority
 	Percent  int
-	Size     string // done of estimated total, the final size, or empty if unknown
+	Size     string // done of estimated total, or final size; empty if unknown
 	Left     string
 	Added    string
 	Status   string
@@ -112,7 +112,7 @@ type jobView struct {
 	Storage  string // a completed job's folder
 }
 
-// Label names the job in controls and in the tab's title.
+// Label is the title and episode, for controls and the tab title.
 func (v jobView) Label() string { return strings.TrimSpace(v.Title + " " + v.Episode) }
 
 func newQueueView(jobs []downloader.Job, paused bool, outages map[string]time.Time, version string, now time.Time) queueView {
@@ -124,7 +124,7 @@ func newQueueView(jobs []downloader.Job, paused bool, outages map[string]time.Ti
 	}
 	var next []queued
 	for _, j := range jobs {
-		// A paused download stops within moments; show it where it is going.
+		// Show a download stopping for a pause as queued.
 		if j.Status == downloader.StatusDownloading && (paused || j.Paused) {
 			j.Status = downloader.StatusQueued
 		}
@@ -277,7 +277,7 @@ func newHistoryView(jobs []downloader.Job, paused bool, version string, now time
 		} else if j.Bytes > 0 {
 			jv.Size = size(j.Bytes)
 		}
-		// A failure's time is only its last attempt's.
+		// A failed job's Started is its last attempt's.
 		if j.Status == downloader.StatusCompleted && !j.Started.IsZero() && j.Finished.After(j.Started) {
 			jv.Took = duration(j.Finished.Sub(j.Started))
 		}
