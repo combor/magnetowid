@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,6 +21,7 @@ import (
 	"github.com/combor/magnetowid/internal/nzb"
 	"github.com/combor/magnetowid/internal/provider"
 	"github.com/combor/magnetowid/internal/store"
+	bolt "go.etcd.io/bbolt"
 )
 
 type fakeProvider struct{}
@@ -27,18 +30,24 @@ func (fakeProvider) Name() string { return "fake" }
 func (fakeProvider) Search(context.Context, provider.Query) ([]provider.Item, error) {
 	return nil, nil
 }
-func (fakeProvider) Resolve(context.Context, string) (provider.Stream, error) {
+
+// Resolving "gone" fails for good.
+func (fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, error) {
+	if id == "gone" {
+		return provider.Stream{}, provider.ErrUnavailable
+	}
 	return provider.Stream{}, nil
 }
 
 type fakeEngine struct{}
 
-func (fakeEngine) Download(context.Context, provider.Stream, string, func(time.Duration, int64)) error {
-	return nil
+func (fakeEngine) Download(_ context.Context, _ provider.Stream, out string, progress func(time.Duration, int64)) error {
+	progress(time.Second, 5)
+	return os.WriteFile(out, []byte("media"), 0o666)
 }
 
-// newUI serves the interface for a queue whose worker never runs.
-func newUI(t *testing.T) (*httptest.Server, *downloader.Queue) {
+// newUI serves the interface for a queue whose worker runs only in finish.
+func newUI(t *testing.T) (*httptest.Server, *downloader.Queue, *bolt.DB) {
 	t.Helper()
 	db, err := store.Open(t.TempDir())
 	if err != nil {
@@ -58,7 +67,44 @@ func newUI(t *testing.T) (*httptest.Server, *downloader.Queue) {
 	(&Handler{Queue: q, APIKey: "key", Version: "1.2.3", Log: slog.New(slog.DiscardHandler)}).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
-	return srv, q
+	return srv, q, db
+}
+
+// finish runs the worker until every job has finished.
+func finish(t *testing.T, q *downloader.Queue) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { q.Run(ctx); close(done) }()
+	defer func() { cancel(); <-done }()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if !slices.ContainsFunc(q.Jobs(), unfinished) {
+			return
+		}
+	}
+	t.Fatalf("jobs did not finish: %+v", q.Jobs())
+}
+
+func unfinished(j downloader.Job) bool {
+	return j.Status == downloader.StatusQueued || j.Status == downloader.StatusDownloading
+}
+
+func add(t *testing.T, q *downloader.Queue, name, ref string) string {
+	t.Helper()
+	id, err := q.Add(name, name+".nzb", "tv", 0, false, nzb.Ref{Provider: "fake", ID: ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func job(q *downloader.Queue, id string) (downloader.Job, bool) {
+	for _, j := range q.Jobs() {
+		if j.ID == id {
+			return j, true
+		}
+	}
+	return downloader.Job{}, false
 }
 
 type response struct {
@@ -122,7 +168,7 @@ func signIn(t *testing.T, srv *httptest.Server) *http.Cookie {
 }
 
 func TestSignIn(t *testing.T) {
-	srv, _ := newUI(t)
+	srv, _, _ := newUI(t)
 
 	if r := get(t, srv, "/", nil); r.status != http.StatusSeeOther || r.header.Get("Location") != "/ui/" {
 		t.Errorf("GET / = %d to %q", r.status, r.header.Get("Location"))
@@ -177,18 +223,10 @@ func TestSignIn(t *testing.T) {
 }
 
 func TestQueuePage(t *testing.T) {
-	srv, q := newUI(t)
+	srv, q, _ := newUI(t)
 	c := signIn(t, srv)
-	add := func(name string) string {
-		t.Helper()
-		id, err := q.Add(name, name+".nzb", "tv", 0, false, nzb.Ref{Provider: "fake", ID: name})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return id
-	}
-	add("Tom & Jerry.S01E02.1080p.WEB-DL.AAC.H.264-FAKE")
-	if _, err := q.PauseJobs(add("Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-FAKE")); err != nil {
+	add(t, q, "Tom & Jerry.S01E02.1080p.WEB-DL.AAC.H.264-FAKE", "1")
+	if _, err := q.PauseJobs(add(t, q, "Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-FAKE", "2")); err != nil {
 		t.Fatal(err)
 	}
 	if err := q.SetPaused(true); err != nil {
@@ -217,13 +255,131 @@ func TestQueuePage(t *testing.T) {
 	// Refreshes carry only the changing part and the tab's title.
 	r = get(t, srv, "/ui/queue", c, "HX-Request", "true")
 	if r.status != http.StatusOK || !strings.HasPrefix(r.body, "<title>Paused — magnetowid</title>") ||
-		strings.Contains(r.body, "<html") || !strings.Contains(r.body, "Ranczo") {
-		t.Errorf("refresh = %d %s", r.status, r.body)
+		strings.Contains(r.body, "<html") || !strings.Contains(r.body, "Ranczo") || r.header.Get("Vary") != "HX-Request" {
+		t.Errorf("refresh = %d %v %s", r.status, r.header, r.body)
+	}
+	if r := get(t, srv, "/ui/queue", c); r.status != http.StatusOK || !strings.Contains(r.body, "<html") {
+		t.Errorf("GET /ui/queue = %d %s", r.status, r.body)
+	}
+}
+
+func TestQueueActions(t *testing.T) {
+	srv, q, db := newUI(t)
+	c := signIn(t, srv)
+	cookie := c.Name + "=" + c.Value
+	id := add(t, q, "Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-FAKE", "1")
+	other := add(t, q, "Ranczo.S02E02.1080p.WEB-DL.AAC.H.264-FAKE", "2")
+
+	// Plain forms go back to the page.
+	for _, tc := range []struct {
+		path  string
+		check func() bool
+	}{
+		{"/ui/queue/pause", q.Paused},
+		{"/ui/queue/resume", func() bool { return !q.Paused() }},
+		{"/ui/queue/" + id + "/pause", func() bool { j, _ := job(q, id); return j.Paused }},
+		{"/ui/queue/" + id + "/resume", func() bool { j, _ := job(q, id); return !j.Paused }},
+		{"/ui/queue/" + other + "/delete", func() bool { _, ok := job(q, other); return !ok }},
+	} {
+		r := post(t, srv, tc.path, nil, "Cookie", cookie)
+		if r.status != http.StatusSeeOther || r.header.Get("Location") != "/ui/" || !tc.check() {
+			t.Errorf("POST %s = %d to %q; applied %v", tc.path, r.status, r.header.Get("Location"), tc.check())
+		}
+	}
+
+	// htmx gets the page's new state at once.
+	r := post(t, srv, "/ui/queue/pause", nil, "Cookie", cookie, "HX-Request", "true")
+	if r.status != http.StatusOK || !strings.HasPrefix(r.body, "<title>Paused — magnetowid</title>") ||
+		!strings.Contains(r.body, "Resume<span class=\"wide\"> queue</span>") || strings.Contains(r.body, "<html") {
+		t.Errorf("htmx pause = %d %s", r.status, r.body)
+	}
+	r = post(t, srv, "/ui/queue/"+id+"/pause", nil, "Cookie", cookie, "HX-Request", "true")
+	if r.status != http.StatusOK || !strings.Contains(r.body, `action="/ui/queue/`+id+`/resume"`) {
+		t.Errorf("htmx job pause = %d %s", r.status, r.body)
+	}
+	// A job that has gone is not an error.
+	if r := post(t, srv, "/ui/queue/SABnzbd_nzo_gone/delete", nil, "Cookie", cookie, "HX-Request", "true"); r.status != http.StatusOK {
+		t.Errorf("removing an unknown job = %d %s", r.status, r.body)
+	}
+
+	if r := post(t, srv, "/ui/queue/resume", nil, "Cookie", cookie, "Sec-Fetch-Site", "cross-site"); r.status != http.StatusForbidden || !q.Paused() {
+		t.Errorf("cross-site resume = %d, paused %v", r.status, q.Paused())
+	}
+	if r := post(t, srv, "/ui/queue/resume", nil); r.status != http.StatusSeeOther || r.header.Get("Location") != "/ui/login" || !q.Paused() {
+		t.Errorf("signed-out resume = %d to %q", r.status, r.header.Get("Location"))
+	}
+	if r := post(t, srv, "/ui/queue/resume", nil, "HX-Request", "true"); r.header.Get("HX-Redirect") != "/ui/login" || !q.Paused() {
+		t.Errorf("signed-out htmx resume = %d, HX-Redirect %q", r.status, r.header.Get("HX-Redirect"))
+	}
+
+	// A failed save shows a notice outside the refreshing part.
+	db.Close()
+	r = post(t, srv, "/ui/queue/resume", nil, "Cookie", cookie, "HX-Request", "true")
+	if r.status != http.StatusInternalServerError || r.header.Get("HX-Retarget") != "#notice" || r.header.Get("HX-Reswap") != "innerHTML" ||
+		!strings.HasPrefix(r.body, `<p class="toast" role="alert">`) || !strings.Contains(r.body, "Couldn’t resume the queue.") {
+		t.Errorf("failed htmx resume = %d %v %s", r.status, r.header, r.body)
+	}
+	r = post(t, srv, "/ui/queue/resume", nil, "Cookie", cookie)
+	if r.status != http.StatusInternalServerError || !strings.Contains(r.body, "<html") || !strings.Contains(r.body, "Couldn’t resume the queue.") {
+		t.Errorf("failed resume = %d %s", r.status, r.body)
+	}
+}
+
+func TestHistoryPage(t *testing.T) {
+	srv, q, _ := newUI(t)
+	c := signIn(t, srv)
+	cookie := c.Name + "=" + c.Value
+	kept := add(t, q, "Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-FAKE", "1")
+	deleted := add(t, q, "Ranczo.S02E02.1080p.WEB-DL.AAC.H.264-FAKE", "2")
+	failed := add(t, q, "Seksmisja.1984.1080p.WEB-DL.AAC.H.264-FAKE", "gone")
+	finish(t, q)
+	add(t, q, "Queued.S01E01", "3")
+
+	r := get(t, srv, "/ui/history", c)
+	for _, want := range []string{
+		"<title>History — magnetowid</title>",
+		`hx-get="/ui/history" hx-trigger="every 5s"`,
+		`<a class="tab" href="/ui/history" aria-current="page">History<span class="tab-count">3</span></a>`,
+		`<span class="badge badge-ok">Completed</span>`,
+		`<span class="badge badge-danger">Failed</span>`,
+		"content unavailable",
+		"Seksmisja",
+		`action="/ui/history/` + deleted + `/delete"`,
+		`name="files" value="1"`,
+	} {
+		if !strings.Contains(r.body, want) {
+			t.Errorf("history lacks %q:\n%s", want, r.body)
+		}
+	}
+	if strings.Contains(r.body, "Queued</span>") {
+		t.Errorf("history shows a queued job:\n%s", r.body)
+	}
+	if r := get(t, srv, "/ui/history", c, "HX-Request", "true"); !strings.HasPrefix(r.body, "<title>History") || strings.Contains(r.body, "<html") {
+		t.Errorf("history refresh = %d %s", r.status, r.body)
+	}
+
+	storage := func(id string) string { j, _ := job(q, id); return j.Storage }
+	keptDir, deletedDir := storage(kept), storage(deleted)
+	r = post(t, srv, "/ui/history/"+kept+"/delete", nil, "Cookie", cookie)
+	if _, err := os.Stat(keptDir); r.status != http.StatusSeeOther || r.header.Get("Location") != "/ui/history" || err != nil {
+		t.Errorf("removing without files = %d to %q; files %v", r.status, r.header.Get("Location"), err)
+	}
+	r = post(t, srv, "/ui/history/"+deleted+"/delete", url.Values{"files": {"1"}}, "Cookie", cookie, "HX-Request", "true")
+	if _, err := os.Stat(deletedDir); r.status != http.StatusOK || !os.IsNotExist(err) || !strings.HasPrefix(r.body, "<title>History") {
+		t.Errorf("removing with files = %d, files %v, %s", r.status, err, r.body)
+	}
+	for _, id := range []string{kept, deleted} {
+		if _, ok := job(q, id); ok {
+			t.Errorf("job %s still in history", id)
+		}
+	}
+	if _, ok := job(q, failed); !ok {
+		t.Error("the failed job went too")
 	}
 }
 
 func TestStaticFiles(t *testing.T) {
-	srv, _ := newUI(t)
+	srv, _, _ := newUI(t)
 	r := get(t, srv, "/ui/static/htmx-4.0.0.min.js", nil)
 	if r.status != http.StatusOK || !strings.HasPrefix(r.header.Get("Content-Type"), "text/javascript") ||
 		r.header.Get("X-Content-Type-Options") != "nosniff" || !strings.Contains(r.body, "htmx") {
@@ -237,6 +393,40 @@ func TestStaticFiles(t *testing.T) {
 		if r := get(t, srv, "/ui/static/"+name, nil); r.status != http.StatusOK {
 			t.Errorf("%s = %d", name, r.status)
 		}
+	}
+}
+
+func TestHistoryView(t *testing.T) {
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	finished := func(name string, status downloader.Status, ago, took time.Duration) downloader.Job {
+		return downloader.Job{ID: name, Name: name, Category: "tv", Status: status, Ref: nzb.Ref{Provider: "tvp"},
+			Finished: now.Add(-ago), Started: now.Add(-ago - took), Bytes: 1_240_000_000, Attempts: 1}
+	}
+	older := finished("Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-TVP", downloader.StatusCompleted, 3*time.Hour, 14*time.Minute)
+	older.Storage = "/downloads/tv/Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-TVP"
+	failed := finished("failed", downloader.StatusFailed, 2*time.Hour, 30*time.Second)
+	failed.Attempts, failed.Error = 6, "content unavailable"
+	newer := finished("newer", downloader.StatusCompleted, time.Minute, 65*time.Minute)
+	running := downloader.Job{ID: "running", Status: downloader.StatusDownloading}
+
+	v := newHistoryView([]downloader.Job{older, running, failed, newer}, false, "1.4.0", now)
+	var got []string
+	for _, j := range v.Jobs {
+		got = append(got, fmt.Sprintf("%s: %s %s, %q %q %q, %d attempts, %q", j.ID, j.Tone, j.Status, j.Size, j.Took, j.Finished, j.Attempt, j.Storage))
+	}
+	want := []string{
+		`newer: ok Completed, "1.2 GB" "1 h 5 min" "1 min ago", 0 attempts, ""`,
+		`failed: danger Failed, "" "" "2 h ago", 6 attempts, ""`,
+		`Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-TVP: ok Completed, "1.2 GB" "14 min" "3 h ago", 0 attempts, "/downloads/tv/Ranczo.S02E01.1080p.WEB-DL.AAC.H.264-TVP"`,
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("history:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if j := v.Jobs[2]; j.Label() != "Ranczo S02E01" || j.Error != "" {
+		t.Errorf("job = %+v", j)
+	}
+	if v.Queued != 1 || v.Finished != 3 || v.State() != "downloading" || v.Refresh() != "/ui/history" || v.Every() != "5s" || v.KeptDays() != 30 {
+		t.Errorf("chrome = %+v, state %q", v.chrome, v.State())
 	}
 }
 
@@ -291,6 +481,18 @@ func TestQueueView(t *testing.T) {
 		t.Errorf("state %q, title %q, version %q", v.State(), v.Title(), v.Version)
 	}
 
+	// A paused download is shown where it will be once it has stopped.
+	stopping := running
+	stopping.Paused = true
+	for _, v := range []queueView{
+		newQueueView([]downloader.Job{stopping, low}, false, nil, "", now),
+		newQueueView([]downloader.Job{running, low}, true, nil, "", now),
+	} {
+		if v.Active != nil || len(v.Next) != 2 || v.Next[0].Running || v.State() == "downloading" {
+			t.Errorf("stopping download: active %+v, next %+v, state %q", v.Active, v.Next, v.State())
+		}
+	}
+
 	for _, tc := range []struct {
 		v     queueView
 		state string
@@ -298,6 +500,7 @@ func TestQueueView(t *testing.T) {
 		{newQueueView(nil, false, nil, "dev", now), "idle"},
 		{newQueueView(nil, true, nil, "dev", now), "paused"},
 		{newQueueView([]downloader.Job{low}, false, nil, "dev", now), "waiting"},
+		{newQueueView([]downloader.Job{paused}, false, nil, "dev", now), "waiting"},
 	} {
 		if tc.v.State() != tc.state || tc.v.Version != "dev" {
 			t.Errorf("state %q, version %q; want %q", tc.v.State(), tc.v.Version, tc.state)
@@ -311,6 +514,7 @@ func TestRenderStates(t *testing.T) {
 	running := downloader.Job{Name: "Hydrozagadka.1971.Polish.1080p.WEB-DL.AAC.H.264-TVP", Status: downloader.StatusDownloading,
 		Started: now, Ref: nzb.Ref{Provider: "tvp"}}
 	failing := downloader.Job{Name: "x", Status: downloader.StatusQueued, RetryAt: now.Add(time.Minute), Error: "<b>boom</b>"}
+	paused := downloader.Job{ID: "p1", Name: "Paused.S01E01.1080p-TVP", Status: downloader.StatusQueued, Paused: true}
 	for _, tc := range []struct {
 		v    queueView
 		want []string
@@ -321,7 +525,12 @@ func TestRenderStates(t *testing.T) {
 			"<span>Polish</span><span>1080p</span><span>WEB-DL</span><span>AAC</span><span>H.264</span>",
 			`value="0"`, "estimating…"}},
 		{newQueueView([]downloader.Job{running, failing}, false, nil, "", now), []string{"Up next", "Retrying in", "&lt;b&gt;boom&lt;/b&gt;"}},
-		{newQueueView([]downloader.Job{failing}, false, nil, "", now), []string{"Queued</h2>", `data-state="waiting"`}},
+		{newQueueView([]downloader.Job{failing}, false, nil, "", now), []string{"Queued</h2>", `data-state="waiting"`,
+			`action="/ui/queue/pause"`, "Pause<span", `action="/ui/queue//pause"`, "Remove it from the queue?"}},
+		{newQueueView([]downloader.Job{running}, false, nil, "", now), []string{"Stop and remove this download?",
+			"the download restarts from the beginning"}},
+		{newQueueView(nil, true, nil, "", now), []string{"Resume<span", `action="/ui/queue/resume"`}},
+		{newQueueView([]downloader.Job{paused}, false, nil, "", now), []string{`action="/ui/queue/p1/resume"`, "Resume Paused S01E01"}},
 	} {
 		var b bytes.Buffer
 		if err := queuePage.ExecuteTemplate(&b, "layout", tc.v); err != nil {
@@ -330,6 +539,34 @@ func TestRenderStates(t *testing.T) {
 		for _, want := range tc.want {
 			if !strings.Contains(b.String(), want) {
 				t.Errorf("page for %+v lacks %q", tc.v, want)
+			}
+		}
+	}
+
+	done := downloader.Job{ID: "d1", Name: "Cube.1997.1080p-TVP", Status: downloader.StatusCompleted, Storage: "/downloads/movies/Cube"}
+	gone := downloader.Job{ID: "f1", Name: "x", Status: downloader.StatusFailed, Error: "<b>boom</b>"}
+	for _, tc := range []struct {
+		v    historyView
+		want []string
+		not  []string
+	}{
+		{newHistoryView(nil, false, "", now), []string{"No finished downloads", "for up to 30 days"}, nil},
+		{newHistoryView([]downloader.Job{done}, false, "", now), []string{"Cube", "/downloads/movies/Cube", "hasn’t imported it yet"}, nil},
+		{newHistoryView([]downloader.Job{gone}, false, "", now), []string{"&lt;b&gt;boom&lt;/b&gt;", `action="/ui/history/f1/delete"`},
+			[]string{`name="files"`, "hasn’t imported"}},
+	} {
+		var b bytes.Buffer
+		if err := historyPage.ExecuteTemplate(&b, "layout", tc.v); err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range tc.want {
+			if !strings.Contains(b.String(), want) {
+				t.Errorf("history for %+v lacks %q", tc.v, want)
+			}
+		}
+		for _, not := range tc.not {
+			if strings.Contains(b.String(), not) {
+				t.Errorf("history for %+v has %q", tc.v, not)
 			}
 		}
 	}
@@ -362,6 +599,9 @@ func TestFormatting(t *testing.T) {
 		{timeLeft(8*time.Minute + 20*time.Second), "about 8 min left"},
 		{timeLeft(2 * time.Hour), "about 2 h left"},
 		{timeLeft(65 * time.Minute), "about 1 h 5 min left"},
+		{duration(20 * time.Second), "less than a minute"},
+		{duration(14*time.Minute + 10*time.Second), "14 min"},
+		{duration(71 * time.Minute), "1 h 11 min"},
 		{ago(10 * time.Second), "just now"},
 		{ago(5 * time.Minute), "5 min ago"},
 		{ago(3 * time.Hour), "3 h ago"},

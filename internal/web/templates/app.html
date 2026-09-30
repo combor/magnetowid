@@ -1,0 +1,85 @@
+{{/* What the queue and history pages share. */}}
+
+{{define "head"}}
+<meta name="htmx-config" content='{"includeIndicatorCSS": false}'>
+<script src="/ui/static/htmx-4.0.0.min.js" defer></script>
+{{- end}}
+
+{{define "content" -}}
+<div id="app" hx-get="{{.Refresh}}" hx-trigger="every {{.Every}}" hx-swap="innerMorph">
+{{template "app" .}}
+</div>
+<div class="notice" id="notice" aria-live="assertive">{{with .Notice}}{{template "notice" .}}{{end}}</div>
+{{- end}}
+
+{{/* The refreshed part of the page, with the tab's title. */}}
+{{define "update"}}<title>{{.Title}}</title>
+{{template "app" .}}{{end}}
+
+{{define "notice" -}}
+<p class="toast" role="alert">{{template "icon-alert"}}<span>{{.}}</span></p>
+{{- end}}
+
+{{define "app" -}}
+<header class="topbar" data-state="{{.State}}">
+  <div class="topbar-inner">
+    <a class="brand" href="/ui/">
+      <span class="mark">{{template "mark"}}</span>
+      <span class="wordmark">magnetowid</span>
+    </a>
+    {{with .Version}}<span class="version">{{.}}</span>{{end}}
+    <div class="topbar-end">
+      <span class="pill pill-{{.State}}">
+        <span class="dot" aria-hidden="true"></span>
+        <span class="pill-label">{{.StateLabel}}</span>
+      </span>
+      <form method="post" action="/ui/logout">
+        <button class="btn btn-ghost" type="submit" aria-label="Sign out">
+          <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8 3.5H5.5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12.5 6.5 16 10l-3.5 3.5M16 10H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="btn-label">Sign out</span>
+        </button>
+      </form>
+    </div>
+  </div>
+</header>
+
+{{/* Actions swap in the page's new state, and cancel a refresh under way so it can't bring back the old one. */}}
+<main class="container" hx-target:inherited="#app" hx-swap:inherited="innerMorph" hx-sync:inherited="#app:replace">
+  <h1 class="visually-hidden">{{if eq .Page "history"}}Download history{{else}}Download queue{{end}}</h1>
+  <div class="toolbar">
+    <nav class="tabs" aria-label="Pages">
+      <a class="tab" href="/ui/"{{if eq .Page "queue"}} aria-current="page"{{end}}>Queue{{if .Queued}}<span class="tab-count">{{.Queued}}</span>{{end}}</a>
+      <a class="tab" href="/ui/history"{{if eq .Page "history"}} aria-current="page"{{end}}>History{{if .Finished}}<span class="tab-count">{{.Finished}}</span>{{end}}</a>
+    </nav>
+    {{- block "actions" .}}{{end}}
+  </div>
+  {{template "page" .}}
+</main>
+{{- end}}
+
+{{define "name" -}}
+<span>{{.Title}}</span>{{with .Episode}} <span class="episode">{{.}}</span>{{end}}
+{{- end}}
+
+{{define "chips" -}}
+{{with .Category}}<span class="chip">{{.}}</span>{{end}}{{with .Provider}}<span class="chip">{{.}}</span>{{end}}{{with .Priority}}<span class="chip chip-accent">{{.}}</span>{{end}}
+{{- end}}
+
+{{define "row-error" -}}
+<p class="row-error" title="{{.}}">{{template "icon-alert"}}<span>{{.}}</span></p>
+{{- end}}
+
+{{/* Asks before removing a job; the page supplies the question and the form. */}}
+{{define "remove-button" -}}
+<button class="icon-btn icon-btn-danger" type="button" popovertarget="remove-{{.ID}}" aria-label="Remove {{.Label}}" title="Remove">{{template "icon-trash"}}</button>
+{{- end}}
+
+{{define "keep-button" -}}
+<button class="btn btn-quiet" type="button" popovertarget="remove-{{.ID}}" popovertargetaction="hide" autofocus>Keep</button>
+{{- end}}
+
+{{define "icon-pause"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="5" y="4" width="3.5" height="12" rx="1.2"/><rect x="11.5" y="4" width="3.5" height="12" rx="1.2"/></svg>{{end}}
+{{define "icon-play"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M6.5 4.3c0-.8.9-1.3 1.6-.9l8.2 5c.6.4.6 1.3 0 1.7l-8.2 5c-.7.4-1.6-.1-1.6-.9V4.3Z"/></svg>{{end}}
+{{define "icon-trash"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M3.5 5.5h13M8 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M5 5.5l.7 10a1.6 1.6 0 0 0 1.6 1.5h5.4a1.6 1.6 0 0 0 1.6-1.5l.7-10M8.5 8.5v5.5M11.5 8.5v5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
+{{define "icon-check"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m5 10.5 3.2 3.2L15 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
+{{define "icon-alert"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm0 11.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2ZM10 5a1 1 0 0 0-1 1v5a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Z"/></svg>{{end}}

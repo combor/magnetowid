@@ -11,13 +11,80 @@ import (
 	"github.com/combor/magnetowid/internal/downloader"
 )
 
+// chrome is what every page shows about the queue as a whole.
+type chrome struct {
+	Version  string
+	Page     string // queue or history
+	Paused   bool
+	Queued   int // unfinished jobs
+	Finished int
+	Notice   string // why an action failed
+	state    string
+}
+
+func newChrome(jobs []downloader.Job, paused bool, version, page string) chrome {
+	c := chrome{Version: displayVersion(version), Page: page, Paused: paused, state: "idle"}
+	for _, j := range jobs {
+		switch j.Status {
+		case downloader.StatusDownloading:
+			c.Queued++
+			if !j.Paused {
+				c.state = "downloading"
+			} else if c.state == "idle" {
+				c.state = "waiting"
+			}
+		case downloader.StatusQueued:
+			c.Queued++
+			if c.state == "idle" {
+				c.state = "waiting"
+			}
+		default:
+			c.Finished++
+		}
+	}
+	if paused {
+		c.state = "paused"
+	}
+	return c
+}
+
+// State names the queue's overall state for the header.
+func (c chrome) State() string { return c.state }
+
+func (c chrome) StateLabel() string {
+	switch c.state {
+	case "paused":
+		return "Paused"
+	case "downloading":
+		return "Downloading"
+	case "waiting":
+		return "Waiting"
+	}
+	return "Idle"
+}
+
+// Refresh is where the page gets its changing part.
+func (c chrome) Refresh() string {
+	if c.Page == "history" {
+		return "/ui/history"
+	}
+	return "/ui/queue"
+}
+
+// Every is how often the page refreshes. History changes less often.
+func (c chrome) Every() string {
+	if c.Page == "history" {
+		return "5s"
+	}
+	return "1s"
+}
+
 // queueView is everything the queue page shows, so tests can render any
 // state without running downloads.
 type queueView struct {
-	Version string
-	Paused  bool
-	Active  *jobView
-	Next    []jobView
+	chrome
+	Active *jobView
+	Next   []jobView
 }
 
 type jobView struct {
@@ -31,17 +98,25 @@ type jobView struct {
 	Provider string
 	Priority string // empty for normal priority
 	Percent  int
-	Size     string // done of estimated total, or empty if unknown
+	Size     string // done of estimated total, the final size, or empty if unknown
 	Left     string
 	Added    string
 	Status   string
-	Tone     string // badge colour: neutral, warn or danger
+	Tone     string // badge colour: neutral, ok, warn or danger
 	Error    string
 	Attempt  int // shown from the second attempt
+	Paused   bool
+	Running  bool
+	Took     string // finished jobs only
+	Finished string
+	Storage  string // a completed job's folder
 }
 
+// Label names the job in controls and in the tab's title.
+func (v jobView) Label() string { return strings.TrimSpace(v.Title + " " + v.Episode) }
+
 func newQueueView(jobs []downloader.Job, paused bool, outages map[string]time.Time, version string, now time.Time) queueView {
-	v := queueView{Version: displayVersion(version), Paused: paused}
+	v := queueView{chrome: newChrome(jobs, paused, version, "queue")}
 	type queued struct {
 		job      downloader.Job
 		retry    time.Time // including the provider's outage
@@ -49,6 +124,10 @@ func newQueueView(jobs []downloader.Job, paused bool, outages map[string]time.Ti
 	}
 	var next []queued
 	for _, j := range jobs {
+		// A paused download stops within moments; show it where it is going.
+		if j.Status == downloader.StatusDownloading && (paused || j.Paused) {
+			j.Status = downloader.StatusQueued
+		}
 		switch j.Status {
 		case downloader.StatusDownloading:
 			jv := newJobView(j, time.Time{}, now)
@@ -95,6 +174,8 @@ func newJobView(j downloader.Job, retry, now time.Time) jobView {
 		Status:   "Queued",
 		Tone:     "neutral",
 		Error:    j.Error,
+		Paused:   j.Paused,
+		Running:  j.Status == downloader.StatusDownloading,
 	}
 	v.Title, v.Episode, v.Specs = splitName(j.Name)
 	switch {
@@ -150,41 +231,65 @@ func splitName(name string) (title, episode string, specs []string) {
 	return strings.ReplaceAll(m[1], ".", " "), m[2], specs
 }
 
-// State names the queue's overall state for the header.
-func (v queueView) State() string {
-	switch {
-	case v.Paused:
-		return "paused"
-	case v.Active != nil:
-		return "downloading"
-	case len(v.Next) > 0:
-		return "waiting"
-	}
-	return "idle"
-}
-
-func (v queueView) StateLabel() string {
-	switch v.State() {
-	case "paused":
-		return "Paused"
-	case "downloading":
-		return "Downloading"
-	case "waiting":
-		return "Waiting"
-	}
-	return "Idle"
-}
-
 // Title shows a running download's progress in the browser tab.
 func (v queueView) Title() string {
 	switch {
 	case v.Active != nil:
-		return fmt.Sprintf("%d%% · %s — magnetowid", v.Active.Percent, strings.TrimSpace(v.Active.Title+" "+v.Active.Episode))
+		return fmt.Sprintf("%d%% · %s — magnetowid", v.Active.Percent, v.Active.Label())
 	case v.Paused:
 		return "Paused — magnetowid"
 	}
 	return "magnetowid"
 }
+
+// historyView is everything the history page shows.
+type historyView struct {
+	chrome
+	Jobs []jobView // newest first
+}
+
+func newHistoryView(jobs []downloader.Job, paused bool, version string, now time.Time) historyView {
+	v := historyView{chrome: newChrome(jobs, paused, version, "history")}
+	var done []downloader.Job
+	for _, j := range jobs {
+		if j.Status == downloader.StatusCompleted || j.Status == downloader.StatusFailed {
+			done = append(done, j)
+		}
+	}
+	slices.SortStableFunc(done, func(a, b downloader.Job) int { return b.Finished.Compare(a.Finished) })
+	for _, j := range done {
+		jv := jobView{
+			ID:       j.ID,
+			Name:     j.Name,
+			Category: j.Category,
+			Provider: j.Ref.Provider,
+			Status:   "Completed",
+			Tone:     "ok",
+			Finished: ago(now.Sub(j.Finished)),
+			Storage:  j.Storage,
+		}
+		jv.Title, jv.Episode, jv.Specs = splitName(j.Name)
+		if j.Status == downloader.StatusFailed {
+			jv.Status, jv.Tone, jv.Error = "Failed", "danger", j.Error
+			if j.Attempts > 1 {
+				jv.Attempt = j.Attempts
+			}
+		} else if j.Bytes > 0 {
+			jv.Size = size(j.Bytes)
+		}
+		// A failure's time is only its last attempt's.
+		if j.Status == downloader.StatusCompleted && !j.Started.IsZero() && j.Finished.After(j.Started) {
+			jv.Took = duration(j.Finished.Sub(j.Started))
+		}
+		v.Jobs = append(v.Jobs, jv)
+	}
+	return v
+}
+
+func (v historyView) Title() string { return "History — magnetowid" }
+
+// KeptDays is how long finished jobs stay in history.
+func (v historyView) KeptDays() int { return int(downloader.HistoryRetention.Hours() / 24) }
 
 // Release builds set a bare version number.
 func displayVersion(s string) string {
@@ -211,15 +316,23 @@ func timeLeft(d time.Duration) string {
 		return "estimating…"
 	case d < time.Minute:
 		return "less than a minute left"
+	}
+	return "about " + duration(d) + " left"
+}
+
+func duration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return "less than a minute"
 	case d < time.Hour:
-		return fmt.Sprintf("about %d min left", int(d.Round(time.Minute).Minutes()))
+		return fmt.Sprintf("%d min", int(d.Round(time.Minute).Minutes()))
 	}
 	d = d.Round(time.Minute)
 	h, m := int(d.Hours()), int(d.Minutes())%60
 	if m == 0 {
-		return fmt.Sprintf("about %d h left", h)
+		return fmt.Sprintf("%d h", h)
 	}
-	return fmt.Sprintf("about %d h %d min left", h, m)
+	return fmt.Sprintf("%d h %d min", h, m)
 }
 
 // Times are relative: the server's time zone is often not the viewer's.

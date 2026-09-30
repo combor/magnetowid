@@ -148,8 +148,9 @@ default). Subtitle failures log a warning and keep the video.
 
 ### Pausing downloads
 
-Use SABnzbd API commands to pause or resume the queue or individual jobs.
-Sonarr and Radarr display paused jobs but cannot control pausing:
+Pause or resume the queue or individual jobs in the
+[web interface](#web-interface), or with SABnzbd API commands. Sonarr and
+Radarr display paused jobs but cannot control pausing:
 
 ```sh
 curl 'http://localhost:8484/api?mode=pause&apikey=YOUR_API_KEY'
@@ -163,13 +164,27 @@ interrupted downloads restart from the beginning when resumed.
 
 ## Web interface
 
-Open `http://<host>:8484/` in a browser and sign in with the API key. The page
-shows the running download's progress and time left, the queued jobs in the
-order they will run, and paused or retrying jobs with their last error. It
-refreshes itself every second.
+Open `http://<host>:8484/` in a browser and sign in with the API key.
+
+**Queue** shows the running download's progress and time left, the queued
+jobs in the order they will run, and paused or retrying jobs with their last
+error. It refreshes itself every second. From here you can:
+
+- pause or resume the whole queue;
+- pause or resume a single job;
+- remove a job. Removing the running download stops it and deletes what it
+  has downloaded so far.
+
+A paused download restarts from the beginning when resumed.
+
+**History** lists finished and failed downloads, newest first, and refreshes
+itself every five seconds. Sonarr and Radarr usually remove downloads they
+have imported; the rest stay for 30 days. Removing a download from history can
+also delete its folder. Remove only downloads that are already imported:
+Sonarr and Radarr cannot import one that has gone from history.
 
 Signing in lasts 30 days. Changing `MAGNETOWID_API_KEY` signs every browser
-out. Search for titles and manage downloads in Sonarr/Radarr.
+out. Search for titles in Sonarr/Radarr.
 
 ## Correcting matches
 
@@ -252,8 +267,9 @@ under **Settings → Download Clients**:
 
 ## Troubleshooting
 
-Search for titles and manage downloads in Sonarr/Radarr. The
-[web interface](#web-interface) shows magnetowid's download queue.
+Search for titles in Sonarr/Radarr. The [web interface](#web-interface) shows
+magnetowid's download queue and history, with each failed or retrying job's
+last error.
 
 | Problem | What to check |
 |---|---|

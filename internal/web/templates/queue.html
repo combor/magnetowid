@@ -1,44 +1,16 @@
-{{define "head"}}
-<meta name="htmx-config" content='{"includeIndicatorCSS": false}'>
-<script src="/ui/static/htmx-4.0.0.min.js" defer></script>
+{{define "actions" -}}
+{{if .Paused -}}
+<form method="post" action="/ui/queue/resume" hx-post="/ui/queue/resume">
+  <button class="btn btn-small btn-accent" type="submit">{{template "icon-play"}}<span>Resume<span class="wide"> queue</span></span></button>
+</form>
+{{- else -}}
+<form method="post" action="/ui/queue/pause" hx-post="/ui/queue/pause">
+  <button class="btn btn-small btn-quiet" type="submit" title="Running downloads restart from the beginning when resumed">{{template "icon-pause"}}<span>Pause<span class="wide"> queue</span></span></button>
+</form>
+{{- end}}
 {{- end}}
 
-{{define "content" -}}
-<div id="app" hx-get="/ui/queue" hx-trigger="every 1s" hx-swap="innerMorph">
-{{template "app" .}}
-</div>
-{{- end}}
-
-{{/* The refreshed part of the page, with the tab's title. */}}
-{{define "update"}}<title>{{.Title}}</title>
-{{template "app" .}}{{end}}
-
-{{define "app" -}}
-<header class="topbar" data-state="{{.State}}">
-  <div class="topbar-inner">
-    <a class="brand" href="/ui/">
-      <span class="mark">{{template "mark"}}</span>
-      <span class="wordmark">magnetowid</span>
-    </a>
-    {{with .Version}}<span class="version">{{.}}</span>{{end}}
-    <div class="topbar-end">
-      <span class="pill pill-{{.State}}">
-        <span class="dot" aria-hidden="true"></span>
-        <span class="pill-label">{{.StateLabel}}</span>
-      </span>
-      <form method="post" action="/ui/logout">
-        <button class="btn btn-ghost" type="submit" aria-label="Sign out">
-          <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M8 3.5H5.5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><path d="M12.5 6.5 16 10l-3.5 3.5M16 10H8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span class="btn-label">Sign out</span>
-        </button>
-      </form>
-    </div>
-  </div>
-</header>
-
-<main class="container">
-  <h1 class="visually-hidden">Download queue</h1>
-
+{{define "page" -}}
   {{- if .Paused}}
   <div class="banner" id="paused" role="status">
     <svg class="icon banner-icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="5" y="4" width="3.5" height="12" rx="1.2"/><rect x="11.5" y="4" width="3.5" height="12" rx="1.2"/></svg>
@@ -51,11 +23,12 @@
   <section class="card hero" id="now-{{.ID}}" aria-labelledby="now-title">
     <div class="hero-head">
       <p class="eyebrow"><span class="eq" aria-hidden="true"><i></i><i></i><i></i></span>Now downloading</p>
-      <div class="chips">{{template "chips" .}}</div>
+      <div class="hero-tools">
+        <div class="chips">{{template "chips" .}}</div>
+        {{template "job-actions" .}}
+      </div>
     </div>
-    <h2 class="hero-title" id="now-title" title="{{.Name}}">
-      <span>{{.Title}}</span>{{with .Episode}} <span class="episode">{{.}}</span>{{end}}
-    </h2>
+    <h2 class="hero-title" id="now-title" title="{{.Name}}">{{template "name" .}}</h2>
     {{- with .Specs}}
     <p class="specs">{{range .}}<span>{{.}}</span>{{end}}</p>
     {{- end}}
@@ -81,14 +54,12 @@
       {{- range .Next}}
       <li class="row" id="job-{{.ID}}">
         <span class="pos" aria-hidden="true">{{if .Position}}{{.Position}}{{else}}–{{end}}</span>
-        <p class="row-title" title="{{.Name}}"><span>{{.Title}}</span>{{with .Episode}} <span class="episode">{{.}}</span>{{end}}</p>
+        <p class="row-title" title="{{.Name}}">{{template "name" .}}</p>
         <span class="badge badge-{{.Tone}}">{{.Status}}</span>
         <p class="meta">{{template "chips" .}}<span class="added">added {{.Added}}</span></p>
+        {{template "job-actions" .}}
         {{- with .Error}}
-        <p class="row-error" title="{{.}}">
-          <svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm0 11.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2ZM10 5a1 1 0 0 0-1 1v5a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Z"/></svg>
-          <span>{{.}}</span>
-        </p>
+        {{template "row-error" .}}
         {{- end}}
       </li>
       {{- end}}
@@ -101,9 +72,28 @@
     <p>Grab a release in Sonarr or Radarr and it’ll show up here.</p>
   </section>
   {{- end}}
-</main>
 {{- end}}
 
-{{define "chips" -}}
-{{with .Category}}<span class="chip">{{.}}</span>{{end}}{{with .Provider}}<span class="chip">{{.}}</span>{{end}}{{with .Priority}}<span class="chip chip-accent">{{.}}</span>{{end}}
+{{define "job-actions" -}}
+<div class="actions">
+  {{- if .Paused}}
+  <form method="post" action="/ui/queue/{{.ID}}/resume" hx-post="/ui/queue/{{.ID}}/resume">
+    <button class="icon-btn icon-btn-accent" type="submit" aria-label="Resume {{.Label}}" title="Resume">{{template "icon-play"}}</button>
+  </form>
+  {{- else}}
+  <form method="post" action="/ui/queue/{{.ID}}/pause" hx-post="/ui/queue/{{.ID}}/pause">
+    <button class="icon-btn" type="submit" aria-label="Pause {{.Label}}" title="{{if .Running}}Pause: the download restarts from the beginning when resumed{{else}}Pause{{end}}">{{template "icon-pause"}}</button>
+  </form>
+  {{- end}}
+  {{template "remove-button" .}}
+  <div class="confirm" id="remove-{{.ID}}" popover role="dialog" aria-labelledby="remove-{{.ID}}-title">
+    <h2 class="confirm-title" id="remove-{{.ID}}-title">{{if .Running}}Stop and remove this download?{{else}}Remove it from the queue?{{end}}</h2>
+    <p class="confirm-name">{{.Label}}</p>
+    <p class="confirm-text">{{if .Running}}What it has downloaded so far is deleted.{{else}}It won’t be downloaded.{{end}}</p>
+    <form class="confirm-actions" method="post" action="/ui/queue/{{.ID}}/delete" hx-post="/ui/queue/{{.ID}}/delete">
+      {{template "keep-button" .}}
+      <button class="btn btn-danger" type="submit">Remove</button>
+    </form>
+  </div>
+</div>
 {{- end}}
