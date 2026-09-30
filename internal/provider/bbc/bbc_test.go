@@ -196,6 +196,28 @@ func TestSearchTVDB(t *testing.T) {
 		t.Errorf("season 1: %v, %v", ids(items), err)
 	}
 
+	// Specials match by title and air date.
+	for q, want := range map[provider.Query][]string{
+		{Kind: provider.Episode, Season: 0, Episode: 1}: {"m001sx3h S00E01"},
+		{Kind: provider.Episode, Season: 0}:             {"m001sx3h S00E01", "m0026d24 S00E05"},
+	} {
+		if _, items, err = p.SearchTVDB(ctx, 449991, q); err != nil || !slices.Equal(ids(items), want) {
+			t.Errorf("S%02dE%02d: %v, %v; want %v", q.Season, q.Episode, ids(items), err, want)
+		}
+	}
+
+	// A daily series' search gives an air date, local to the UK.
+	for date, want := range map[string][]string{
+		"2023-11-25": {"m001sx3h S00E01"},
+		"2025-05-31": {"m002d3lr S02E08"},
+		"2025-06-01": nil,
+	} {
+		_, items, err = p.SearchTVDB(ctx, 449991, provider.Query{Kind: provider.Episode, AirDate: date})
+		if err != nil || !slices.Equal(ids(items), want) {
+			t.Errorf("aired %s: %v, %v; want %v", date, ids(items), err, want)
+		}
+	}
+
 	// The classic series shares the title; nothing matches, but the programme is found.
 	title, items, err = p.SearchTVDB(ctx, 76107, provider.Query{Kind: provider.Episode, Season: 1, Episode: 1})
 	if err != nil || title != "Doctor Who" || len(items) != 0 {
@@ -240,6 +262,7 @@ func TestSearchEpisodesByTitle(t *testing.T) {
 	}{
 		{"Doctor Who 2023", 2, 8, []string{"m002d3lr S02E08"}},
 		{"Doctor Who 2023", 1, 0, []string{"m001z8bz S01E01"}},
+		{"Doctor Who 2023", 0, 1, []string{"m001sx3h S00E01"}},
 		// An alternative title, when no main title matches.
 		{"Doctor Who 2024", 2, 8, []string{"m002d3lr S02E08"}},
 		// Classic Doctor Who has no S01E01 on iPlayer; BBC's own is 2024's.
@@ -254,6 +277,10 @@ func TestSearchEpisodesByTitle(t *testing.T) {
 		if err != nil || !slices.Equal(ids(items), tt.want) {
 			t.Errorf("%q S%02dE%02d: %v, %v; want %v", tt.title, tt.season, tt.episode, ids(items), err, tt.want)
 		}
+	}
+	items, err := p.Search(ctx, provider.Query{Kind: provider.Episode, Title: "Doctor Who 2023", AirDate: "2025-05-31"})
+	if err != nil || !slices.Equal(ids(items), []string{"m002d3lr S02E08"}) {
+		t.Errorf("by air date: %v, %v", ids(items), err)
 	}
 	// Found series are watched, as by ID.
 	if got := p.watchedSeries.ids(); !slices.Equal(got, []int{76107, 449991}) {

@@ -283,17 +283,60 @@ func TestEpisodeSearch(t *testing.T) {
 	}
 }
 
-func TestEpisodeSearchNeedsSeason(t *testing.T) {
+func TestEpisodeSearchNeedsNumbers(t *testing.T) {
 	fp := &fakeProvider{items: []provider.Item{{ID: "1", Kind: provider.Episode}}}
 	srv := newServer(t, fp)
 	for _, params := range []url.Values{
 		{"t": {"tvsearch"}, "q": {"Ranczo"}},
-		{"t": {"tvsearch"}, "q": {"Ranczo"}, "season": {"2024"}, "ep": {"09/26"}},
+		{"t": {"tvsearch"}, "q": {"Ranczo"}, "season": {"-1"}, "ep": {"1"}},
+		{"t": {"tvsearch"}, "q": {"Ranczo"}, "season": {"2"}, "ep": {"0"}},
+		{"t": {"tvsearch"}, "q": {"Ranczo"}, "season": {"2024"}, "ep": {"13/45"}},
+		{"t": {"tvsearch"}, "q": {"Ranczo"}, "season": {"2024"}, "ep": {"9-26"}},
+		// Sonarr's search for a special by its title.
+		{"t": {"search"}, "q": {"Doctor Who The Star Beast"}, "cat": {"5000,5040"}},
 	} {
 		params.Set("apikey", "secret")
 		if items := parseFeed(t, get(t, srv, "/fake/api", params)); len(items) != 0 {
 			t.Errorf("%v: items = %+v", params, items)
 		}
+	}
+}
+
+// Sonarr accepts TVDB numbering for a daily episode it asked for by date.
+func TestDailySearch(t *testing.T) {
+	fp := &fakeTVDBProvider{title: "Newsnight", fakeProvider: fakeProvider{items: []provider.Item{
+		{ID: "1", Kind: provider.Episode, Season: 2026, Episode: 187},
+	}}}
+	srv := newServer(t, fp)
+	for _, params := range []url.Values{
+		{"t": {"tvsearch"}, "tvdbid": {"73236"}, "season": {"2026"}, "ep": {"09/29"}, "apikey": {"secret"}},
+		{"t": {"tvsearch"}, "q": {"Newsnight"}, "season": {"2026"}, "ep": {"09/29"}, "apikey": {"secret"}},
+	} {
+		items := parseFeed(t, get(t, srv, "/fake/api", params))
+		want := provider.Query{Kind: provider.Episode, AirDate: "2026-09-29"}
+		if params.Has("q") {
+			want.Title = "Newsnight"
+		}
+		if fp.got != want {
+			t.Errorf("%v: query = %+v, want %+v", params, fp.got, want)
+		}
+		if len(items) != 1 || items[0].Title != "Newsnight.S2026E187.1080p.WEB-DL.AAC.H.264-FAKE" {
+			t.Errorf("%v: items = %+v", params, items)
+		}
+	}
+}
+
+func TestSpecialSearch(t *testing.T) {
+	fp := &fakeProvider{items: []provider.Item{{ID: "1", Kind: provider.Episode, Season: 0, Episode: 1}}}
+	srv := newServer(t, fp)
+	items := parseFeed(t, get(t, srv, "/fake/api", url.Values{
+		"t": {"tvsearch"}, "q": {"Doctor Who 2023"}, "season": {"00"}, "ep": {"1"}, "apikey": {"secret"},
+	}))
+	if want := (provider.Query{Kind: provider.Episode, Title: "Doctor Who 2023", Season: 0, Episode: 1}); fp.got != want {
+		t.Errorf("query = %+v, want %+v", fp.got, want)
+	}
+	if len(items) != 1 || items[0].Title != "Doctor.Who.2023.S00E01.1080p.WEB-DL.AAC.H.264-FAKE" {
+		t.Errorf("items = %+v", items)
 	}
 }
 

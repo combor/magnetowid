@@ -46,7 +46,7 @@ func (p *Provider) SearchTVDB(ctx context.Context, tvdbID int, q provider.Query)
 	p.watch(tvdbID, s.title)
 	var items []provider.Item
 	for _, m := range matched {
-		if m.tvdb.season == q.Season && (q.Episode == 0 || m.tvdb.episode == q.Episode) {
+		if q.Wants(m.tvdb.season, m.tvdb.episode, m.tvdb.aired) {
 			items = append(items, episodeItem(m.bbc, m.tvdb.season, m.tvdb.episode))
 		}
 	}

@@ -126,7 +126,7 @@ func (p *Provider) Search(ctx context.Context, q provider.Query) ([]provider.Ite
 }
 
 func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]provider.Item, error) {
-	if q.Season <= 0 {
+	if q.Season < 0 {
 		return nil, nil
 	}
 	// Sonarr searches by title when its ID search finds nothing, even if an
@@ -134,6 +134,10 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 	if tvdbID, ok := p.overriddenSeries(q.Title); ok {
 		_, items, err := p.SearchTVDB(ctx, tvdbID, q)
 		return items, err
+	}
+	// Air dates need TVDB's episodes, and specials an override.
+	if q.AirDate != "" || q.Season == 0 {
+		return nil, nil
 	}
 	serial, ok, err := p.findSerial(ctx, q.Title, "")
 	if err != nil || !ok {
@@ -162,7 +166,9 @@ func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provide
 	if err != nil {
 		return nil, err
 	}
-	if _, ruled := ov.Rule(q.Season); ruled || all {
+	// Only overrides place specials: TVP's unnumbered episodes are mostly
+	// trailers and extras.
+	if _, ruled := ov.Rule(q.Season); ruled || all || q.Season == 0 {
 		return items, nil
 	}
 	found, err := p.automatic(ctx, serial, seasons, q, tv)
@@ -188,7 +194,7 @@ func (p *Provider) overridden(ctx context.Context, serial product, seasons []pro
 	numbers := []int{q.Episode}
 	if q.Episode == 0 {
 		numbers = nil
-		for _, e := range tv.episodes {
+		for _, e := range tv.all() {
 			if e.season == q.Season {
 				numbers = append(numbers, e.episode)
 			}
@@ -215,22 +221,23 @@ func (p *Provider) overridden(ctx context.Context, serial product, seasons []pro
 }
 
 // Return the free episode at the target, if TVP has exactly one there.
-// Season rules skip episodes pinned to other TVDB episodes.
+// Season rules skip episodes pinned to other TVDB episodes. Pins can name
+// unnumbered episodes, such as a special.
 func (p *Provider) target(ctx context.Context, serialID int64, seasons []product, t provider.Target, ov provider.SeriesOverride) (product, bool, error) {
 	var match []product
 	for _, s := range seasons {
 		if t.ID == "" && t.Season != 0 && s.Number != t.Season {
 			continue
 		}
-		eps, err := p.episodes(ctx, serialID, s.ID)
+		eps, err := p.seasonEpisodes(ctx, serialID, s.ID)
 		if err != nil {
 			return product{}, false, err
 		}
-		for _, e := range eps {
+		for _, e := range eps.listed {
 			if t.ID != "" && strconv.FormatInt(e.ID, 10) == t.ID {
 				return e, !e.Payable, nil
 			}
-			if t.ID == "" && e.Number == t.Episode && !ov.Pinned(strconv.FormatInt(e.ID, 10)) {
+			if t.ID == "" && e.Number > 0 && e.Number == t.Episode && !ov.Pinned(strconv.FormatInt(e.ID, 10)) {
 				match = append(match, e)
 			}
 		}
@@ -443,20 +450,32 @@ func (p *Provider) seasons(ctx context.Context, serialID int64) ([]product, erro
 
 // Episodes are sorted by number, without specials. The returned slice is shared.
 func (p *Provider) episodes(ctx context.Context, serialID, seasonID int64) ([]product, error) {
+	eps, err := p.seasonEpisodes(ctx, serialID, seasonID)
+	return eps.numbered, err
+}
+
+// A season's episodes as TVP lists them, with unnumbered extras such as
+// trailers, and the numbered ones sorted by number.
+type seasonEpisodes struct {
+	listed, numbered []product
+}
+
+// The returned slices are shared; do not modify them.
+func (p *Provider) seasonEpisodes(ctx context.Context, serialID, seasonID int64) (seasonEpisodes, error) {
 	path := fmt.Sprintf("vods/serials/%d/seasons/%d/episodes", serialID, seasonID)
-	return cached(p.cache, path, func() ([]product, error) {
-		var all []product
-		if err := p.get(ctx, path, nil, &all); err != nil {
-			return nil, err
+	return cached(p.cache, path, func() (seasonEpisodes, error) {
+		var listed []product
+		if err := p.get(ctx, path, nil, &listed); err != nil {
+			return seasonEpisodes{}, err
 		}
-		numbered := all[:0]
-		for _, e := range all {
+		var numbered []product
+		for _, e := range listed {
 			if e.Number > 0 {
 				numbered = append(numbered, e)
 			}
 		}
 		sort.SliceStable(numbered, func(i, j int) bool { return numbered[i].Number < numbered[j].Number })
-		return numbered, nil
+		return seasonEpisodes{listed: listed, numbered: numbered}, nil
 	})
 }
 
