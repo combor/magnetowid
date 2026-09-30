@@ -171,7 +171,7 @@ func (h *Handler) rss(w http.ResponseWriter, r *http.Request, p provider.Provide
 	releases := slices.Clone(cur.releases)
 	failed := h.feeds.redate(feed, releases, cur.began)
 	slices.SortFunc(releases, func(a, b provider.Release) int {
-		return cmp.Or(b.Published.Compare(a.Published), failed[a.ID].Compare(failed[b.ID]), strings.Compare(a.ID, b.ID))
+		return cmp.Or(b.Published.Compare(a.Published), failed[a.Key()].Compare(failed[b.Key()]), strings.Compare(a.ID, b.ID))
 	})
 	pg, res := h.probePage(r.Context(), start, p, releases, off, lim)
 	h.feeds.update(feed, releases, pg, res, cur.began)
@@ -214,7 +214,7 @@ func (h *Handler) probePage(ctx context.Context, start time.Time, p provider.Pro
 type rssFeeds struct {
 	mu    sync.Mutex
 	syncs map[string]feedSync
-	held  map[string]map[string]heldRelease // then by release ID
+	held  map[string]map[string]heldRelease // then by provider.Release.Key
 }
 
 // Snapshot the feed at offset 0 so provider updates cannot shift later pages.
@@ -254,12 +254,12 @@ func (fs *rssFeeds) redate(feed string, releases []provider.Release, began time.
 	defer fs.mu.Unlock()
 	failed = make(map[string]time.Time)
 	for i, r := range releases {
-		held, ok := fs.held[feed][r.ID]
+		held, ok := fs.held[feed][r.Key()]
 		switch {
 		case !ok:
 		case held.offered.IsZero():
 			releases[i].Published = began
-			failed[r.ID] = held.failed
+			failed[r.Key()] = held.failed
 		default:
 			releases[i].Published = held.offered
 		}
@@ -273,19 +273,19 @@ func (fs *rssFeeds) update(feed string, releases []provider.Release, offered []p
 	prev := fs.held[feed]
 	held := make(map[string]heldRelease)
 	for _, r := range releases {
-		if h, ok := prev[r.ID]; ok {
-			held[r.ID] = h
+		if h, ok := prev[r.Key()]; ok {
+			held[r.Key()] = h
 		}
 	}
 	for _, r := range res.late {
-		held[r.ID] = heldRelease{failed: held[r.ID].failed}
+		held[r.Key()] = heldRelease{failed: held[r.Key()].failed}
 	}
 	for _, r := range res.failed {
-		held[r.ID] = heldRelease{failed: began}
+		held[r.Key()] = heldRelease{failed: began}
 	}
 	for _, r := range offered {
-		if h, ok := held[r.ID]; ok && h.offered.IsZero() {
-			held[r.ID] = heldRelease{offered: began}
+		if h, ok := held[r.Key()]; ok && h.offered.IsZero() {
+			held[r.Key()] = heldRelease{offered: began}
 		}
 	}
 	if fs.held == nil {

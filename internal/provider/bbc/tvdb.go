@@ -38,7 +38,8 @@ func (p *Provider) SearchTVDB(ctx context.Context, tvdbID int, q provider.Query)
 		p.log.Warn("TVDB lookup failed; Sonarr will search by title", "tvdbid", tvdbID, "err", err)
 		return "", nil, nil
 	}
-	matched, found, err := p.matchSeries(ctx, s)
+	ov, _ := p.overrides.Load().SeriesFor(tvdbID)
+	matched, found, err := p.matchSeries(ctx, s, ov)
 	if err != nil || !found {
 		return "", nil, err
 	}
@@ -55,10 +56,15 @@ func (p *Provider) SearchTVDB(ctx context.Context, tvdbID int, q provider.Query)
 // Search Sonarr's title first: TVDB's aliases can name other versions, e.g.
 // "The Traitors" for The Traitors (US). Of programmes with the same title,
 // choose the one matching most episodes. found reports whether iPlayer has
-// the series, even if no episode matches.
-func (p *Provider) matchSeries(ctx context.Context, s series) (matched []pair, found bool, err error) {
-	for _, title := range s.searchTitles() {
-		shows, err := p.findShows(ctx, title)
+// the series, even if no episode matches. The override's titles replace
+// Sonarr's and TVDB's.
+func (p *Provider) matchSeries(ctx context.Context, s series, ov provider.SeriesOverride) (matched []pair, found bool, err error) {
+	titles := s.searchTitles()
+	if len(ov.Titles) > 0 {
+		titles = ov.Titles
+	}
+	for _, title := range titles {
+		shows, err := p.findShows(ctx, title, ov.ID)
 		if err != nil || len(shows) == 0 {
 			if err != nil {
 				return nil, false, err
@@ -70,7 +76,7 @@ func (p *Provider) matchSeries(ctx context.Context, s series) (matched []pair, f
 			if err != nil {
 				return nil, false, err
 			}
-			if m := match(s.episodes, eps); len(m) > len(matched) {
+			if m := match(s.episodes, eps, ov); len(m) > len(matched) {
 				matched = m
 			}
 		}

@@ -32,17 +32,32 @@ type feed struct {
 
 	mu        sync.Mutex
 	found     map[int][]provider.Release // by TVDB ID, or under filmsKey
-	firstSeen map[string]time.Time       // by TVP ID
+	firstSeen map[string]time.Time       // by release key
 	tried     map[int]time.Time          // when a rebuild last began on each series
 	built     time.Time
 	stale     bool // series added since the last rebuild
 	building  bool
+	// Counts override changes, which discard rebuilds begun before them.
+	generation int
 }
 
 func (f *feed) markStale() {
 	f.mu.Lock()
 	f.stale = true
 	f.mu.Unlock()
+}
+
+// Drop releases found under superseded overrides, which a failed rebuild
+// would otherwise keep offering.
+func (f *feed) forget(keys ...int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, k := range keys {
+		delete(f.found, k)
+	}
+	if len(keys) > 0 {
+		f.generation++
+	}
 }
 
 // Recent returns cached releases and starts stale rebuilds asynchronously.
@@ -81,9 +96,14 @@ func (f *feed) recent() []provider.Release {
 // Keep previous releases for failed keys; tried lists the series reached.
 // Date new releases when discovered: TVP dates paid premieres early, which
 // would put them behind Sonarr's RSS cutoff when they become free.
-func (f *feed) publish(found map[int][]provider.Release, tried, failed []int) int {
+// A rebuild begun in an earlier generation publishes nothing; the feed stays
+// stale, so the next sync rebuilds it.
+func (f *feed) publish(found map[int][]provider.Release, tried, failed []int, generation int) int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if generation != f.generation {
+		return 0
+	}
 	// New releases must postdate anything served during this rebuild.
 	done := time.Now()
 	if f.tried == nil {
@@ -95,19 +115,19 @@ func (f *feed) publish(found map[int][]provider.Release, tried, failed []int) in
 	firstSeen := make(map[string]time.Time)
 	for _, rs := range found {
 		for i := range rs {
-			seen, ok := f.firstSeen[rs[i].ID]
+			seen, ok := f.firstSeen[rs[i].Key()]
 			if !ok {
 				seen = done
 			}
 			rs[i].Published = seen
-			firstSeen[rs[i].ID] = seen
+			firstSeen[rs[i].Key()] = seen
 		}
 	}
 	for _, id := range failed {
 		if rs := f.found[id]; len(rs) > 0 {
 			found[id] = rs
 			for _, r := range rs {
-				firstSeen[r.ID] = r.Published
+				firstSeen[r.Key()] = r.Published
 			}
 		}
 	}
@@ -119,6 +139,7 @@ func (p *Provider) rebuildSeries(ctx context.Context) {
 	f := &p.seriesFeed
 	f.mu.Lock()
 	f.stale = false // before reading the list, so no series added later is missed
+	generation := f.generation
 	ids := p.watchedSeries.ids()
 	// Try the least recently checked series first to avoid starvation on timeouts.
 	slices.SortStableFunc(ids, func(a, b int) int { return f.tried[a].Compare(f.tried[b]) })
@@ -150,12 +171,13 @@ func (p *Provider) rebuildSeries(ctx context.Context) {
 		p.log.Warn("ran out of time looking for new TVP episodes; the series left go first next time",
 			"series", len(ids), "tried", len(tried))
 	}
-	n := f.publish(found, tried, failed)
+	n := f.publish(found, tried, failed, generation)
 	p.log.Debug("rebuilt TVP series feed", "series", len(ids), "releases", n, "took", time.Since(now).Round(time.Second))
 }
 
 func (p *Provider) recentEpisodes(ctx context.Context, tvdbID int, now time.Time) ([]provider.Release, error) {
-	s, err := p.titles.series(ctx, tvdbID)
+	ov, _ := p.overrides.Load().SeriesFor(tvdbID)
+	s, err := p.titles.seriesFor(ctx, tvdbID, len(ov.Titles) == 0)
 	if err != nil {
 		return nil, err
 	}
@@ -164,7 +186,7 @@ func (p *Provider) recentEpisodes(ctx context.Context, tvdbID int, now time.Time
 		if e.aired.Before(now.Add(-recentWindow)) || e.aired.After(now.Add(airDateSlack)) {
 			continue
 		}
-		m, err := p.searchTitles(ctx, s, provider.Query{Kind: provider.Episode, Season: e.season, Episode: e.episode})
+		m, err := p.searchTitles(ctx, s, ov, provider.Query{Kind: provider.Episode, Season: e.season, Episode: e.episode})
 		if err != nil {
 			return nil, err
 		}
@@ -176,6 +198,10 @@ func (p *Provider) recentEpisodes(ctx context.Context, tvdbID int, now time.Time
 }
 
 func (p *Provider) rebuildFilms(ctx context.Context) {
+	p.filmFeed.mu.Lock()
+	p.filmFeed.stale = false // before reading overrides, so no later change is missed
+	generation := p.filmFeed.generation
+	p.filmFeed.mu.Unlock()
 	start := time.Now()
 	watched := p.watchedFilms.all()
 	found := make(map[int][]provider.Release)
@@ -190,7 +216,7 @@ func (p *Provider) rebuildFilms(ctx context.Context) {
 			found[filmsKey] = rs
 		}
 	}
-	n := p.filmFeed.publish(found, nil, failed)
+	n := p.filmFeed.publish(found, nil, failed, generation)
 	p.log.Debug("rebuilt TVP film feed", "watched", len(watched), "releases", n, "took", time.Since(start).Round(time.Second))
 }
 
@@ -204,13 +230,13 @@ func (p *Provider) newFilms(ctx context.Context, watched []watchRecord) ([]provi
 	if err := p.get(ctx, "vods", params, &res); err != nil {
 		return nil, err
 	}
-	normalized := make([]string, len(watched))
+	wants := make([]filmWant, len(watched))
 	for i, w := range watched {
-		normalized[i] = provider.NormalizeTitle(w.Title)
+		wants[i] = p.filmWant(w.Title, w.Year)
 	}
 	match := func(v product) (watchRecord, bool) {
 		for i, w := range watched {
-			if filmMatches(v, normalized[i], w.Year) {
+			if wants[i].matches(v) {
 				return w, true
 			}
 		}

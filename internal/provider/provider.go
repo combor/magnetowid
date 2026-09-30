@@ -4,8 +4,13 @@ package provider
 import (
 	"context"
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
+	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -86,6 +91,15 @@ type Release struct {
 	Item
 }
 
+// Key identifies the release as clients see it: the site's item under the
+// client's title and numbering, which overrides can change.
+func (r Release) Key() string {
+	if r.Kind == Movie {
+		return fmt.Sprintf("%s %d %s", r.ID, r.Year, NormalizeTitle(r.Title))
+	}
+	return fmt.Sprintf("%s S%02dE%02d %s", r.ID, r.Season, r.Episode, NormalizeTitle(r.Title))
+}
+
 // RecentLister supplies releases for Sonarr/Radarr RSS sync.
 type RecentLister interface {
 	// Return promptly: timeouts and errors count against the indexer.
@@ -94,6 +108,167 @@ type RecentLister interface {
 
 // ErrUnavailable marks DRM, paid, or region-blocked content. It is not retried.
 var ErrUnavailable = errors.New("content unavailable")
+
+// Overridable sites accept the user's corrections to automatic matching.
+// An override replaces automatic matching, and its checks, wherever it applies.
+type Overridable interface {
+	// SetOverrides is called at startup and after every change, possibly while
+	// the site serves requests.
+	SetOverrides(*Overrides)
+	// ParseID returns the site ID in ref, an ID or a URL of the site's page.
+	ParseID(ref string) (string, error)
+}
+
+// Overrides are one site's corrections, keyed as Sonarr and Radarr ask.
+// They are never modified once made.
+type Overrides struct {
+	Series map[int]SeriesOverride  // by TVDB ID
+	Films  map[string]FilmOverride // by FilmKey
+}
+
+// SeriesFor accepts a nil o.
+func (o *Overrides) SeriesFor(tvdbID int) (SeriesOverride, bool) {
+	if o == nil {
+		return SeriesOverride{}, false
+	}
+	s, ok := o.Series[tvdbID]
+	return s, ok
+}
+
+// Film accepts a nil o.
+func (o *Overrides) Film(title string, year int) (FilmOverride, bool) {
+	if o == nil {
+		return FilmOverride{}, false
+	}
+	f, ok := o.Films[FilmKey(title, year)]
+	return f, ok
+}
+
+// FilmPinned reports whether a film override names the site ID, which no
+// other film then matches. It accepts a nil o.
+func (o *Overrides) FilmPinned(id string) bool {
+	if o == nil {
+		return false
+	}
+	for _, f := range o.Films {
+		if f.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// Changes returns the TVDB IDs whose overrides differ from before, and
+// whether any film's does. Either may be nil.
+func (o *Overrides) Changes(before *Overrides) (series []int, films bool) {
+	var now, then Overrides
+	if o != nil {
+		now = *o
+	}
+	if before != nil {
+		then = *before
+	}
+	for id, s := range now.Series {
+		if b, ok := then.Series[id]; !ok || !reflect.DeepEqual(s, b) {
+			series = append(series, id)
+		}
+	}
+	for id := range then.Series {
+		if _, ok := now.Series[id]; !ok {
+			series = append(series, id)
+		}
+	}
+	return series, !maps.EqualFunc(now.Films, then.Films, func(a, b FilmOverride) bool { return reflect.DeepEqual(a, b) })
+}
+
+type SeriesOverride struct {
+	Titles []string `json:"titles,omitempty"` // searched instead of automatic ones
+	// The site's series, chosen from the search results for the titles.
+	ID       string                   `json:"id,omitempty"`
+	Seasons  []SeasonRule             `json:"seasons,omitempty"`
+	Episodes map[EpisodeNumber]string `json:"episodes,omitempty"` // site IDs, which win over season rules
+}
+
+// SeasonRule places a TVDB season's episodes in the site's numbering.
+type SeasonRule struct {
+	Season int `json:"season"` // TVDB's
+	// 0 finds the site's episode number in any season, if only one has it.
+	SiteSeason int `json:"site_season"`
+	Offset     int `json:"offset"` // site episode = TVDB episode + Offset
+}
+
+// EpisodeNumber is a TVDB episode, written as "S01E05".
+type EpisodeNumber struct{ Season, Episode int }
+
+var episodeNumber = regexp.MustCompile(`^[Ss](\d{1,4})[Ee](\d{1,5})$`)
+
+func (n EpisodeNumber) String() string { return fmt.Sprintf("S%02dE%02d", n.Season, n.Episode) }
+
+func (n EpisodeNumber) MarshalText() ([]byte, error) { return []byte(n.String()), nil }
+
+func (n *EpisodeNumber) UnmarshalText(text []byte) error {
+	m := episodeNumber.FindSubmatch(text)
+	if m == nil {
+		return fmt.Errorf("episode %q is not like S01E05", text)
+	}
+	n.Season, _ = strconv.Atoi(string(m[1]))
+	n.Episode, _ = strconv.Atoi(string(m[2]))
+	return nil
+}
+
+// Rule returns the season's rule, which covers all its episodes.
+func (o SeriesOverride) Rule(season int) (SeasonRule, bool) {
+	for _, r := range o.Seasons {
+		if r.Season == season {
+			return r, true
+		}
+	}
+	return SeasonRule{}, false
+}
+
+// Target is where a TVDB episode is on the site: an ID, or a season and
+// episode number there. Season 0 is any season; Episode can be below 1,
+// where no episode is.
+type Target struct {
+	ID              string
+	Season, Episode int
+}
+
+// Target returns where the override puts a TVDB episode. ok=false leaves it
+// to automatic matching.
+func (o SeriesOverride) Target(season, episode int) (t Target, ok bool) {
+	if id, ok := o.Episodes[EpisodeNumber{season, episode}]; ok {
+		return Target{ID: id}, true
+	}
+	if r, ok := o.Rule(season); ok {
+		return Target{Season: r.SiteSeason, Episode: episode + r.Offset}, true
+	}
+	return Target{}, false
+}
+
+// Pinned reports whether an episode pin names the site ID.
+func (o SeriesOverride) Pinned(id string) bool {
+	for _, v := range o.Episodes {
+		if v == id {
+			return true
+		}
+	}
+	return false
+}
+
+type FilmOverride struct {
+	// Radarr's title and year.
+	Title  string   `json:"title"`
+	Year   int      `json:"year"`
+	Titles []string `json:"titles,omitempty"` // searched instead of Radarr's
+	// The site's film, found by searching the titles. Its title and year may differ.
+	ID string `json:"id,omitempty"`
+}
+
+// FilmKey matches Radarr's title-and-year identity.
+func FilmKey(title string, year int) string {
+	return strconv.Itoa(year) + " " + NormalizeTitle(title)
+}
 
 type Registry struct {
 	byName map[string]Provider

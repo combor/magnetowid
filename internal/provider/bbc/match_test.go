@@ -5,6 +5,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 // ep builds a BBC episode aired on date; broadcast is "HH:MM" or "".
@@ -41,7 +43,7 @@ func pairs(ps []pair) []string {
 func checkMatch(t *testing.T, name string, tv []tvdbEpisode, eps []programme, want ...string) {
 	t.Helper()
 	slices.Sort(want)
-	if got := pairs(match(tv, eps)); !slices.Equal(got, want) {
+	if got := pairs(match(tv, eps, provider.SeriesOverride{})); !slices.Equal(got, want) {
 		t.Errorf("%s:\n got %s\nwant %s", name, strings.Join(got, " "), strings.Join(want, " "))
 	}
 }

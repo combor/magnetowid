@@ -41,6 +41,18 @@ numbering alone would make 2024's *Space Babies* classic Doctor Who's S01E01.
 Skyhook data is cached for a day and failed lookups for 5 minutes; iPlayer's
 listings for 10 minutes. Allow access to `skyhook.sonarr.tv`.
 
+## Overrides
+
+[Overrides](../../../docs/usage.md#correcting-matches) use iPlayer's numbering:
+
+- `site_season` is iPlayer's series, and episodes are its episode numbers, as
+  in *Series 4: Episode 3*. Unnumbered episodes need an `episodes` entry.
+- IDs are programme IDs (PIDs), e.g. `m002d3lr` in
+  `https://www.bbc.co.uk/iplayer/episode/m002d3lr/doctor-who-season-2-8-the-reality-war`.
+  A series' `id` is on its episodes page, e.g.
+  `https://www.bbc.co.uk/iplayer/episodes/p0gglvqn/doctor-who`. Overrides
+  also accept iPlayer and `bbc.co.uk/programmes` URLs.
+
 ## Films
 
 Radarr's title must match iPlayer's, and its year iPlayer's within one year.

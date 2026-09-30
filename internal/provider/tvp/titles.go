@@ -38,12 +38,13 @@ const (
 // Search Polish titles before Sonarr's. Watch matched series even when the
 // episode is absent; failed lookups let Sonarr fall back to title search.
 func (p *Provider) SearchTVDB(ctx context.Context, tvdbID int, q provider.Query) (string, []provider.Item, error) {
-	s, err := p.titles.series(ctx, tvdbID)
+	ov, _ := p.overrides.Load().SeriesFor(tvdbID)
+	s, err := p.titles.seriesFor(ctx, tvdbID, len(ov.Titles) == 0)
 	if err != nil {
 		p.log.Warn("TVDB lookup failed; Sonarr will search by title", "tvdbid", tvdbID, "err", err)
 		return "", nil, nil
 	}
-	m, err := p.searchTitles(ctx, s, q)
+	m, err := p.searchTitles(ctx, s, ov, q)
 	if err != nil {
 		return "", nil, err
 	}
@@ -56,6 +57,26 @@ func (p *Provider) SearchTVDB(ctx context.Context, tvdbID int, q provider.Query)
 	return s.title, m.items, nil
 }
 
+// Return the only overridden series with Sonarr's title. Only cached lookups
+// count: Sonarr's ID search, which precedes its title search, made them.
+func (p *Provider) overriddenSeries(title string) (int, bool) {
+	o := p.overrides.Load()
+	want := provider.NormalizeTitle(title)
+	if o == nil || want == "" {
+		return 0, false
+	}
+	found := 0
+	for id := range o.Series {
+		if s, ok := p.titles.cached(id); ok && provider.NormalizeTitle(s.title) == want {
+			if found != 0 {
+				return 0, false
+			}
+			found = id
+		}
+	}
+	return found, found != 0
+}
+
 type titleMatch struct {
 	items       []provider.Item
 	tvpTitle    string // the title that found items
@@ -63,16 +84,21 @@ type titleMatch struct {
 }
 
 // Suppress per-search logs here: feed rebuilds call this for every recent episode.
-func (p *Provider) searchTitles(ctx context.Context, s series, q provider.Query) (titleMatch, error) {
+// The override's titles replace the Polish titles and Sonarr's.
+func (p *Provider) searchTitles(ctx context.Context, s series, ov provider.SeriesOverride, q provider.Query) (titleMatch, error) {
 	var m titleMatch
+	titles := append(slices.Clone(s.polish), s.title)
+	if len(ov.Titles) > 0 {
+		titles = ov.Titles
+	}
 	tried := map[string]bool{}
-	for _, title := range append(slices.Clone(s.polish), s.title) {
+	for _, title := range titles {
 		norm := provider.NormalizeTitle(title)
 		if norm == "" || tried[norm] {
 			continue
 		}
 		tried[norm] = true
-		serial, ok, err := p.findSerial(ctx, title)
+		serial, ok, err := p.findSerial(ctx, title, ov.ID)
 		if err != nil {
 			return titleMatch{}, err
 		}
@@ -80,7 +106,7 @@ func (p *Provider) searchTitles(ctx context.Context, s series, q provider.Query)
 			continue
 		}
 		m.serialFound = true
-		items, err := p.serialEpisodes(ctx, serial, q, &s)
+		items, err := p.serialEpisodes(ctx, serial, q, &s, ov)
 		if err != nil {
 			return titleMatch{}, err
 		}
@@ -118,9 +144,11 @@ type titleLookup struct {
 }
 
 type cachedSeries struct {
-	series  series
-	err     error
-	expires time.Time
+	series series
+	err    error
+	// err is Wikidata's: series has Skyhook's data, without Polish titles.
+	noPolish bool
+	expires  time.Time
 }
 
 func newTitleLookup(client *http.Client) *titleLookup {
@@ -133,23 +161,37 @@ func newTitleLookup(client *http.Client) *titleLookup {
 }
 
 func (l *titleLookup) series(ctx context.Context, tvdbID int) (series, error) {
+	return l.seriesFor(ctx, tvdbID, true)
+}
+
+// Without polish, a Wikidata failure leaves out Polish titles instead of
+// failing the lookup.
+func (l *titleLookup) seriesFor(ctx context.Context, tvdbID int, polish bool) (series, error) {
+	c := l.get(ctx, tvdbID)
+	if c.noPolish && !polish {
+		return c.series, nil
+	}
+	return c.series, c.err
+}
+
+func (l *titleLookup) get(ctx context.Context, tvdbID int) cachedSeries {
 	now := time.Now()
 	l.mu.Lock()
 	hit, ok := l.cache[tvdbID]
 	l.mu.Unlock()
 	if ok && now.Before(hit.expires) {
-		return hit.series, hit.err
+		return hit
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
-	s, err := l.lookup(lookupCtx, tvdbID)
-	ttl := cacheTTL
+	s, noPolish, err := l.lookup(lookupCtx, tvdbID)
+	c := cachedSeries{series: s, err: err, noPolish: noPolish, expires: now.Add(cacheTTL)}
 	if err != nil {
 		if ctx.Err() != nil {
-			return s, err // caller cancellation is not a lookup failure
+			return c // caller cancellation is not a lookup failure
 		}
-		ttl = failureTTL
+		c.expires = now.Add(failureTTL)
 	}
 	l.mu.Lock()
 	for k, v := range l.cache {
@@ -157,12 +199,21 @@ func (l *titleLookup) series(ctx context.Context, tvdbID int) (series, error) {
 			delete(l.cache, k)
 		}
 	}
-	l.cache[tvdbID] = cachedSeries{series: s, err: err, expires: now.Add(ttl)}
+	l.cache[tvdbID] = c
 	l.mu.Unlock()
-	return s, err
+	return c
 }
 
-func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
+// cached returns an unexpired lookup of Sonarr's title without making one.
+func (l *titleLookup) cached(tvdbID int) (series, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	hit, ok := l.cache[tvdbID]
+	return hit.series, ok && (hit.err == nil || hit.noPolish) && time.Now().Before(hit.expires)
+}
+
+// noPolish reports a Wikidata failure, which leaves s without Polish titles.
+func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (s series, noPolish bool, err error) {
 	var show struct {
 		Title    string `json:"title"`
 		ImdbID   string `json:"imdbId"`
@@ -174,13 +225,13 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 			AirDateUtc            string `json:"airDateUtc"`
 		} `json:"episodes"`
 	}
-	if err := l.get(ctx, l.skyhookURL+"/"+strconv.Itoa(tvdbID), &show); err != nil {
-		return series{}, fmt.Errorf("skyhook: %w", err)
+	if err := l.fetch(ctx, l.skyhookURL+"/"+strconv.Itoa(tvdbID), &show); err != nil {
+		return series{}, false, fmt.Errorf("skyhook: %w", err)
 	}
 	if show.Title == "" {
-		return series{}, fmt.Errorf("skyhook: TVDB %d has no title", tvdbID)
+		return series{}, false, fmt.Errorf("skyhook: TVDB %d has no title", tvdbID)
 	}
-	s := series{title: show.Title}
+	s = series{title: show.Title}
 	for _, e := range show.Episodes {
 		if e.SeasonNumber <= 0 || e.EpisodeNumber <= 0 {
 			continue // specials
@@ -202,14 +253,14 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 	for _, claim := range claims {
 		titles, found, err := l.polishLabels(ctx, claim)
 		if err != nil {
-			return series{}, fmt.Errorf("wikidata: %w", err)
+			return s, true, fmt.Errorf("wikidata: %w", err)
 		}
 		if found {
 			s.polish = titles
 			break
 		}
 	}
-	return s, nil
+	return s, false, nil
 }
 
 // claim is a Wikidata property match, e.g. P4835=83920. The boolean reports any matching items.
@@ -237,7 +288,7 @@ func (l *titleLookup) polishLabels(ctx context.Context, claim string) ([]string,
 			} `json:"pages"`
 		} `json:"query"`
 	}
-	if err := l.get(ctx, l.wikidataURL+"?"+v.Encode(), &res); err != nil {
+	if err := l.fetch(ctx, l.wikidataURL+"?"+v.Encode(), &res); err != nil {
 		return nil, false, err
 	}
 	if res.Error != nil {
@@ -264,7 +315,7 @@ func isIMDbID(s string) bool {
 	return true
 }
 
-func (l *titleLookup) get(ctx context.Context, url string, out any) error {
+func (l *titleLookup) fetch(ctx context.Context, url string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return err

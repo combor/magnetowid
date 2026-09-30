@@ -83,7 +83,7 @@ func TestLive(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		matched, found, err := p.matchSeries(ctx, s)
+		matched, found, err := p.matchSeries(ctx, s, provider.SeriesOverride{})
 		if err != nil || !found || len(matched) < 100 {
 			t.Fatalf("%d EastEnders episodes matched, found %v, %v", len(matched), found, err)
 		}

@@ -26,8 +26,9 @@ const (
 	acquiredGap = 5 * 365 * 24 * time.Hour
 )
 
-// match pairs TVDB episodes with BBC's, one to one, in passes of decreasing
-// certainty:
+// match pairs TVDB episodes with BBC's, one to one. The user's override
+// decides the episodes it covers, even if it finds no BBC episode for them,
+// and passes of decreasing certainty pair the rest:
 //
 //  1. titles unique on both sides, e.g. "The Reality War" or "29/09/2026";
 //  2. UK air dates, in order when several episodes share a day and each side
@@ -38,11 +39,11 @@ const (
 // Passes 3 and 4 reject pairs with different titles. Passes 1 and 4 reject BBC
 // episodes that aired over a year before TVDB's, such as a remake's original,
 // and pass 4 those that aired over five years after, such as a remake.
-func match(tv []tvdbEpisode, eps []programme) []pair {
+func match(tv []tvdbEpisode, eps []programme, ov provider.SeriesOverride) []pair {
 	ts := make([]side, len(tv))
 	for i, e := range tv {
 		title, n := titleKey(e.title)
-		ts[i] = side{title: title, titleNumber: n, aired: day(e.aired), season: e.season, episode: e.episode, index: i}
+		ts[i] = side{title: title, titleNumber: n, aired: day(e.aired), season: e.season, episode: e.episode, index: i, match: -1}
 	}
 	bs := make([]side, len(eps))
 	for i, e := range eps {
@@ -53,6 +54,7 @@ func match(tv []tvdbEpisode, eps []programme) []pair {
 			position: e.ParentPosition, broadcast: parseTime(v.FirstBroadcast), index: i}
 	}
 	m := matcher{tv: ts, bbc: bs}
+	m.byOverride(tv, eps, ov)
 	m.byTitle()
 	m.bySameDay()
 	m.byNearDay()
@@ -90,13 +92,44 @@ func (m *matcher) link(i, j int) {
 	m.bbc[j].matched = true
 }
 
-func (m *matcher) byTitle() {
-	for i := range m.tv {
-		m.tv[i].match = -1
+// Pinned BBC episodes are reserved for their pins. Season rules find BBC
+// episodes by BBC's numbering, which must name one of the unpinned, whatever
+// other rules have matched.
+func (m *matcher) byOverride(tv []tvdbEpisode, eps []programme, ov provider.SeriesOverride) {
+	pinned := make([]bool, len(eps))
+	for j, e := range eps {
+		if ov.Pinned(e.ID) {
+			pinned[j] = true
+			m.bbc[j].matched = true
+		}
 	}
+	for i, e := range tv {
+		t, ok := ov.Target(e.season, e.episode)
+		if !ok {
+			continue
+		}
+		m.tv[i].matched = true
+		var j int
+		if t.ID != "" {
+			j = slices.IndexFunc(eps, func(b programme) bool { return b.ID == t.ID })
+			ok = j >= 0
+		} else {
+			j, ok = only(m.bbc, func(b side) bool {
+				return !pinned[b.index] && t.Episode > 0 && b.episode == t.Episode && (t.Season == 0 || b.season == t.Season)
+			})
+			ok = ok && !m.bbc[j].matched // another rule's
+		}
+		if ok {
+			m.link(i, j)
+		}
+	}
+}
+
+func (m *matcher) byTitle() {
 	tvTitles, bbcTitles := titles(m.tv), titles(m.bbc)
 	for t, is := range tvTitles {
-		if js := bbcTitles[t]; len(is) == 1 && len(js) == 1 && !predates(m.bbc[js[0]], m.tv[is[0]]) {
+		js := bbcTitles[t]
+		if len(is) == 1 && len(js) == 1 && !m.tv[is[0]].matched && !m.bbc[js[0]].matched && !predates(m.bbc[js[0]], m.tv[is[0]]) {
 			m.link(is[0], js[0])
 		}
 	}

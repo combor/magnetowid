@@ -157,6 +157,59 @@ curl 'http://localhost:8484/api?mode=queue&name=resume&value=JOB_ID&apikey=YOUR_
 and comma-separated IDs in `value` to pause jobs. Pauses survive restarts;
 interrupted downloads restart from the beginning when resumed.
 
+## Correcting matches
+
+If magnetowid misses a series or film, or pairs the wrong episodes, add an
+override. The overrides API takes the same API key, in an `X-Api-Key` header
+or an `apikey` parameter. Changes apply to the next search, and RSS feeds
+rebuild with them at the next sync. Overrides are saved in
+`.magnetowid-jobs.db`.
+
+| Request | Purpose |
+|---|---|
+| `GET /overrides` | List each site's overrides. |
+| `PUT /overrides/{site}/series/{tvdbid}` | Set a series' override. |
+| `GET` or `DELETE /overrides/{site}/series/{tvdbid}` | Show or remove it. |
+| `PUT /overrides/{site}/films/{year}/{title}` | Set a film's override, using Radarr's title and year. |
+| `GET` or `DELETE /overrides/{site}/films/{year}/{title}` | Show or remove it. |
+
+`{site}` is `tvp` or `bbc`. A series' TVDB ID is in its TVDB link in Sonarr.
+Escape `/` in film titles as `%2F`.
+
+A series override has one or more of:
+
+| Field | Meaning |
+|---|---|
+| `titles` | The site's titles to search, instead of those magnetowid finds. |
+| `id` | The site's series, among the search results for the titles, if several share a title. |
+| `seasons` | Rules placing TVDB seasons in the site's numbering: TVDB's episode *n* is the site's episode *n* + `offset` in season `site_season`. `site_season` 0 accepts any season, if only one has that number. |
+| `episodes` | Single TVDB episodes, such as `S01E05`, each with the site's episode ID. These win over `seasons`, and no other episode matches a pinned one. |
+
+A film override has `titles` to search instead of Radarr's, an `id`, or both.
+The site's film with that `id`, found by searching the titles, is used even
+if its title or year differs from Radarr's, and no other film matches it.
+
+IDs accept the site's page URLs. For example, *Ranczo*'s second season
+continues TVP's numbering from 14:
+
+```sh
+curl -X PUT -H 'X-Api-Key: YOUR_API_KEY' http://localhost:8484/overrides/tvp/series/81970 -d '{
+  "titles": ["Ranczo"],
+  "id": "https://vod.tvp.pl/seriale,18/ranczo-odcinki,316445",
+  "seasons": [{"season": 2, "site_season": 2, "offset": 13}]
+}'
+```
+
+The response shows the override as saved, with IDs taken from the URLs.
+Invalid overrides are refused with an explanation.
+
+An override replaces magnetowid's matching for everything it covers,
+including its checks. An episode it places where the site has none, or only a
+paid one, gets no release; other episodes are matched as before. Overrides
+apply to searches and RSS, including the title searches Sonarr makes when its
+TVDB ID search finds nothing. Specials are not supported. See each site's
+notes for its numbering.
+
 ## Docker networking and shared downloads
 
 Choose an address that Sonarr/Radarr can reach:
@@ -196,6 +249,7 @@ and manage downloads in Sonarr/Radarr.
 | Downloads finish but are not imported | Mount the shared folder into Sonarr/Radarr, check file permissions and add a Remote Path Mapping if the paths differ. |
 | A magnetowid release is sent to another download client | Set the indexer's **Download Client** to `magnetowid`. |
 | Downloads stay queued with `provider unreachable` in the log | Check the network, DNS, and VPN. Jobs resume automatically when the site becomes reachable, without consuming retries. |
+| A series or film is missing, or its episodes are wrong | Check that the site has it for free, then add an [override](#correcting-matches). |
 
 To inspect recent container messages:
 
@@ -213,10 +267,11 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 
 - **Titles:** Radarr searches local and original film titles. Sonarr sends its
   series title, often English; a different site title requires TVDB ID support.
-  See each site's notes.
+  See each site's notes, or add an [override](#correcting-matches).
 - **Episode numbers:** differences from TVDB require provider-specific mapping.
   This applies to both search and RSS; TVP's soap mapping and BBC's matching
-  by title and air date have their own limits.
+  by title and air date have their own limits. [Overrides](#correcting-matches)
+  correct the rest.
 - **Availability:** DRM, paid, region-blocked, and unreadable streams are omitted
   from results. Availability can still change between search and download.
 - **Streams:** release names use the selected stream's resolution, codecs, and
@@ -238,6 +293,8 @@ Implement `provider.Provider` (`internal/provider/provider.go`) in a new package
   Sonarr's titles don't match the site's;
 - optionally implements `provider.RecentLister` to offer new releases to RSS
   sync;
+- optionally implements `provider.Overridable` to apply the user's
+  [overrides](#correcting-matches) in its searches and feeds;
 - documents the site's own behaviour and limits in a `README.md` in its package.
 
 ## Development

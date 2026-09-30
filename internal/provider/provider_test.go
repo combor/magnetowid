@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"sync"
 	"testing"
 )
@@ -80,4 +82,95 @@ func TestNormalizeTitleConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestSeriesOverrideTarget(t *testing.T) {
+	o := SeriesOverride{
+		Seasons:  []SeasonRule{{Season: 2, SiteSeason: 1, Offset: 13}, {Season: 3, Offset: 100}},
+		Episodes: map[EpisodeNumber]string{{2, 5}: "pinned"},
+	}
+	tests := []struct {
+		season, episode int
+		want            Target
+		ok              bool
+	}{
+		{2, 1, Target{Season: 1, Episode: 14}, true},
+		{2, 5, Target{ID: "pinned"}, true}, // pins win over rules
+		{3, 7, Target{Season: 0, Episode: 107}, true},
+		{1, 1, Target{}, false},
+	}
+	for _, tt := range tests {
+		if got, ok := o.Target(tt.season, tt.episode); got != tt.want || ok != tt.ok {
+			t.Errorf("Target(%d, %d) = %+v, %v; want %+v, %v", tt.season, tt.episode, got, ok, tt.want, tt.ok)
+		}
+	}
+	if !o.Pinned("pinned") || o.Pinned("other") {
+		t.Error("Pinned is wrong")
+	}
+}
+
+func TestEpisodeNumberJSON(t *testing.T) {
+	var got map[EpisodeNumber]string
+	if err := json.Unmarshal([]byte(`{"S01E05":"a","s10e123":"b"}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[EpisodeNumber{1, 5}] != "a" || got[EpisodeNumber{10, 123}] != "b" {
+		t.Fatalf("got %v", got)
+	}
+	out, err := json.Marshal(got)
+	if err != nil || string(out) != `{"S01E05":"a","S10E123":"b"}` {
+		t.Errorf("Marshal = %s, %v", out, err)
+	}
+	for _, bad := range []string{`{"1x05":"a"}`, `{"S01":"a"}`, `{"S01E05 ":"a"}`} {
+		if err := json.Unmarshal([]byte(bad), &got); err == nil {
+			t.Errorf("Unmarshal(%s) succeeded", bad)
+		}
+	}
+}
+
+func TestOverridesLookup(t *testing.T) {
+	var none *Overrides
+	if _, ok := none.SeriesFor(1); ok {
+		t.Error("nil overrides have a series")
+	}
+	if _, ok := none.Film("Cube", 1997); ok {
+		t.Error("nil overrides have a film")
+	}
+	o := &Overrides{
+		Series: map[int]SeriesOverride{83920: {ID: "292065"}},
+		Films:  map[string]FilmOverride{FilmKey("The Sexmission", 1984): {Titles: []string{"Seksmisja"}}},
+	}
+	if s, ok := o.SeriesFor(83920); !ok || s.ID != "292065" {
+		t.Errorf("SeriesFor = %+v, %v", s, ok)
+	}
+	// Radarr's title as it cleans titles.
+	if f, ok := o.Film("sexmission", 1984); !ok || f.Titles[0] != "Seksmisja" {
+		t.Errorf("Film = %+v, %v", f, ok)
+	}
+	if _, ok := o.Film("Sexmission", 1985); ok {
+		t.Error("another year's film has an override")
+	}
+}
+
+func TestOverridesChanges(t *testing.T) {
+	before := &Overrides{
+		Series: map[int]SeriesOverride{1: {ID: "a"}, 2: {Titles: []string{"B"}}, 3: {ID: "c"}},
+		Films:  map[string]FilmOverride{"1990 x": {ID: "x"}},
+	}
+	after := &Overrides{
+		Series: map[int]SeriesOverride{1: {ID: "a"}, 2: {Titles: []string{"B", "C"}}, 4: {ID: "d"}},
+		Films:  map[string]FilmOverride{"1990 x": {ID: "x"}},
+	}
+	series, films := after.Changes(before)
+	slices.Sort(series)
+	if !slices.Equal(series, []int{2, 3, 4}) || films {
+		t.Errorf("Changes = %v, %v; want [2 3 4], false", series, films)
+	}
+	var none *Overrides
+	if series, films := none.Changes(before); len(series) != 3 || !films {
+		t.Errorf("removing all: %v, %v", series, films)
+	}
+	if series, films := none.Changes(&Overrides{}); len(series) != 0 || films {
+		t.Errorf("nil and empty differ: %v, %v", series, films)
+	}
 }
