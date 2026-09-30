@@ -90,6 +90,7 @@
     <h2 class="confirm-title" id="remove-{{.ID}}-title">{{if .Running}}Stop and remove this download?{{else}}Remove it from the queue?{{end}}</h2>
     <p class="confirm-name">{{.Label}}</p>
     <p class="confirm-text">{{if .Running}}What it has downloaded so far is deleted.{{else}}It won’t be downloaded.{{end}}</p>
+    {{template "remove-notice" .}}
     <form class="confirm-actions" method="post" action="/ui/queue/{{.ID}}/delete" hx-post="/ui/queue/{{.ID}}/delete">
       {{template "keep-button" .}}
       <button class="btn btn-danger" type="submit">Remove</button>

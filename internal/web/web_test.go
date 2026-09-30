@@ -238,6 +238,8 @@ func TestQueuePage(t *testing.T) {
 		"<title>Paused — magnetowid</title>",
 		"Downloads are paused.",
 		`hx-get="/ui/queue"`,
+		// Actions queue with refreshes, so responses land in order.
+		`hx-sync:inherited="#app:queue all"`,
 		"Tom &amp; Jerry",
 		`<span class="episode">S02E01</span>`,
 		`<span class="badge badge-warn">Paused</span>`,
@@ -250,6 +252,10 @@ func TestQueuePage(t *testing.T) {
 	}
 	if r.header.Get("Cache-Control") != "no-store" || !strings.Contains(r.header.Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Errorf("queue page headers %v", r.header)
+	}
+	// htmx would move focus to the first autofocus after every refresh.
+	if strings.Contains(r.body, "autofocus") || !strings.Contains(r.body, `class="confirm-notice"`) {
+		t.Errorf("queue page confirmations:\n%s", r.body)
 	}
 
 	// Refreshes carry only the changing part and the tab's title.
@@ -322,6 +328,12 @@ func TestQueueActions(t *testing.T) {
 	r = post(t, srv, "/ui/queue/resume", nil, "Cookie", cookie)
 	if r.status != http.StatusInternalServerError || !strings.Contains(r.body, "<html") || !strings.Contains(r.body, "Couldn’t resume the queue.") {
 		t.Errorf("failed resume = %d %s", r.status, r.body)
+	}
+	// The open confirmation would hide a notice at the bottom of the page.
+	r = post(t, srv, "/ui/queue/"+id+"/delete", nil, "Cookie", cookie, "HX-Request", "true")
+	if r.status != http.StatusInternalServerError || r.header.Get("HX-Retarget") != "#remove-"+id+"-notice" ||
+		!strings.Contains(r.body, "Couldn’t remove the download.") {
+		t.Errorf("failed htmx removal = %d %v %s", r.status, r.header, r.body)
 	}
 }
 

@@ -234,7 +234,7 @@ func (h *Handler) pauseQueue(pause bool) http.HandlerFunc {
 		what = "pause the queue"
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		h.done(w, r, "queue", what, h.Queue.SetPaused(pause))
+		h.done(w, r, "queue", what, "#notice", h.Queue.SetPaused(pause))
 	}
 }
 
@@ -245,37 +245,40 @@ func (h *Handler) pauseJob(pause bool) http.HandlerFunc {
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		_, err := f(r.PathValue("id"))
-		h.done(w, r, "queue", what, err)
+		h.done(w, r, "queue", what, "#notice", err)
 	}
 }
 
 // A download that finished meanwhile stays in history.
 func (h *Handler) cancelJob(w http.ResponseWriter, r *http.Request) {
-	_, err := h.Queue.Cancel(r.PathValue("id"))
-	h.done(w, r, "queue", "remove the download", err)
+	id := r.PathValue("id")
+	_, err := h.Queue.Cancel(id)
+	h.done(w, r, "queue", "remove the download", "#remove-"+id+"-notice", err)
 }
 
 func (h *Handler) deleteJob(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
-	_, err := h.Queue.Delete(r.PathValue("id"), r.PostFormValue("files") == "1")
-	h.done(w, r, "history", "remove the download from history", err)
+	id := r.PathValue("id")
+	_, err := h.Queue.Delete(id, r.PostFormValue("files") == "1")
+	h.done(w, r, "history", "remove the download from history", "#remove-"+id+"-notice", err)
 }
 
 // done answers an action on page. htmx gets the page's new state at once and
 // plain forms go back to the page. Unknown jobs are not errors: the page
-// shows they have gone.
-func (h *Handler) done(w http.ResponseWriter, r *http.Request, page, what string, err error) {
+// shows they have gone. For htmx, a failure's notice goes into the element
+// notice selects.
+func (h *Handler) done(w http.ResponseWriter, r *http.Request, page, what, notice string, err error) {
 	if err != nil {
 		h.Log.Error("web interface action failed", "action", what, "err", err)
-		notice := "Couldn’t " + what + ". The log has the details."
+		msg := "Couldn’t " + what + ". The log has the details."
 		if !htmx(r) {
-			h.show(w, r, http.StatusInternalServerError, page, notice)
+			h.show(w, r, http.StatusInternalServerError, page, msg)
 			return
 		}
-		// Outside the refreshing part, so the next refresh keeps it.
-		w.Header().Set("HX-Retarget", "#notice")
+		// Somewhere the next refresh keeps it.
+		w.Header().Set("HX-Retarget", notice)
 		w.Header().Set("HX-Reswap", "innerHTML")
-		h.render(w, http.StatusInternalServerError, app, "notice", notice)
+		h.render(w, http.StatusInternalServerError, app, "notice", msg)
 		return
 	}
 	if htmx(r) {

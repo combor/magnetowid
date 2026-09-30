@@ -974,10 +974,23 @@ code {
   font-size: 14px;
   font-weight: 550;
   box-shadow: var(--shadow-float);
-  animation: toast 8s ease forwards;
 }
 
+.notice .toast { animation: toast 8s ease forwards; }
 .toast .icon { margin-top: 1px; }
+
+.confirm-notice:empty { display: none; }
+
+.confirm-notice .toast {
+  max-width: none;
+  margin-top: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  font-size: 13.5px;
+  box-shadow: none;
+}
 
 /* Sign in */
 
@@ -1106,7 +1119,7 @@ code {
   }
 
   /* Hiding a notice is not motion. */
-  .toast { animation: toast-hide 8s step-end forwards !important; }
+  .notice .toast { animation: toast-hide 8s step-end forwards !important; }
 }
 
 /* Phones */

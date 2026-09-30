@@ -1,7 +1,8 @@
 {{/* What the queue and history pages share. */}}
 
+{{/* Refreshes keep a failed removal's notice while its confirmation is open. */}}
 {{define "head"}}
-<meta name="htmx-config" content='{"includeIndicatorCSS": false}'>
+<meta name="htmx-config" content='{"includeIndicatorCSS": false, "morphSkipChildren": "[hx-morph-skip-children], .confirm:popover-open .confirm-notice"}'>
 <script src="/ui/static/htmx-4.0.0.min.js" defer></script>
 {{- end}}
 
@@ -43,8 +44,10 @@
   </div>
 </header>
 
-{{/* Actions swap in the page's new state, and cancel a refresh under way so it can't bring back the old one. */}}
-<main class="container" hx-target:inherited="#app" hx-swap:inherited="innerMorph" hx-sync:inherited="#app:replace">
+{{/* Actions swap in the page's new state. They queue with the refreshes, so responses land in order and none brings back an
+     older state. Nothing is cancelled: the bundled htmx frees the queue when a cancelled request ends, while its
+     replacement still runs. */}}
+<main class="container" hx-target:inherited="#app" hx-swap:inherited="innerMorph" hx-sync:inherited="#app:queue all">
   <h1 class="visually-hidden">{{if eq .Page "history"}}Download history{{else}}Download queue{{end}}</h1>
   <div class="toolbar">
     <nav class="tabs" aria-label="Pages">
@@ -74,8 +77,12 @@
 <button class="icon-btn icon-btn-danger" type="button" popovertarget="remove-{{.ID}}" aria-label="Remove {{.Label}}" title="Remove">{{template "icon-trash"}}</button>
 {{- end}}
 
+{{/* A failed removal shows here: a notice below would be hidden by the open confirmation. */}}
+{{define "remove-notice"}}<div class="confirm-notice" id="remove-{{.ID}}-notice" aria-live="assertive"></div>{{end}}
+
+{{/* No autofocus: htmx focuses the first one after every refresh. */}}
 {{define "keep-button" -}}
-<button class="btn btn-quiet" type="button" popovertarget="remove-{{.ID}}" popovertargetaction="hide" autofocus>Keep</button>
+<button class="btn btn-quiet" type="button" popovertarget="remove-{{.ID}}" popovertargetaction="hide">Keep</button>
 {{- end}}
 
 {{define "icon-pause"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="5" y="4" width="3.5" height="12" rx="1.2"/><rect x="11.5" y="4" width="3.5" height="12" rx="1.2"/></svg>{{end}}

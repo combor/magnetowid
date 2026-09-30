@@ -30,6 +30,7 @@
             {{- if eq .Tone "ok"}}
             <p class="confirm-text">If Sonarr or Radarr hasn’t imported it yet, it won’t.</p>
             {{- end}}
+            {{template "remove-notice" .}}
             <div class="confirm-actions">
               {{template "keep-button" .}}
               <button class="btn btn-strong" type="submit"><span class="if-kept">Remove</span><span class="if-deleted">Remove and delete</span></button>
