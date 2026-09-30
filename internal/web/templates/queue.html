@@ -5,7 +5,7 @@
 {{- end}}
 
 {{define "content" -}}
-<div id="app" hx-get="/ui/queue" hx-trigger="every 2s" hx-swap="innerMorph">
+<div id="app" hx-get="/ui/queue" hx-trigger="every 1s" hx-swap="innerMorph">
 {{template "app" .}}
 </div>
 {{- end}}

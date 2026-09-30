@@ -6,8 +6,8 @@ document.addEventListener("htmx:after:request", () => {
   delete document.documentElement.dataset.offline;
 });
 
-// Refreshes come every 2 s, so between them advance the running download at
-// its average rate, and ease towards each new reading instead of jumping.
+// Refreshes come every second, so between them advance the running download
+// at its average rate, and ease towards each new reading instead of jumping.
 // Progress never moves backwards within a job; a new job gets a new bar.
 {
   const maxLead = 4; // seconds to extrapolate past the last reading

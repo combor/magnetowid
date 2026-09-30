@@ -162,7 +162,7 @@ interrupted downloads restart from the beginning when resumed.
 Open `http://<host>:8484/` in a browser and sign in with the API key. The page
 shows the running download's progress and time left, the queued jobs in the
 order they will run, and paused or retrying jobs with their last error. It
-refreshes itself every two seconds.
+refreshes itself every second.
 
 Signing in lasts 30 days. Changing `MAGNETOWID_API_KEY` signs every browser
 out. Search for titles and manage downloads in Sonarr/Radarr.
