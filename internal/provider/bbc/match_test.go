@@ -104,6 +104,16 @@ func TestMatchDates(t *testing.T) {
 	}
 	checkMatch(t, "EastEnders", tv, eps, "S38E105=p1", "S38E106=p2", "S41E84=typo", "S42E155=today")
 
+	// iPlayer lists a day's parts in reverse; BBC's positions order them.
+	tv = []tvdbEpisode{tvdb(41, 111, "", "2025-07-15"), tvdb(41, 112, "", "2025-07-15")}
+	part1, part2 := ep("p1", "15/07/2025, Part 1", "", "2025-07-15", ""), ep("p2", "15/07/2025, Part 2", "", "2025-07-15", "")
+	part1.ParentPosition, part2.ParentPosition = 7154, 7155
+	checkMatch(t, "parts", tv, []programme{part2, part1}, "S41E111=p1", "S41E112=p2")
+	// Without a position for each, broadcast times order the day.
+	part1, part2 = ep("p1", "15/07/2025, Part 1", "", "2025-07-15", "19:30"), ep("p2", "15/07/2025, Part 2", "", "2025-07-15", "20:00")
+	part1.ParentPosition = 7154
+	checkMatch(t, "parts, one position", tv, []programme{part2, part1}, "S41E111=p1", "S41E112=p2")
+
 	// A day's counts must agree.
 	tv = []tvdbEpisode{tvdb(1, 1, "", "2020-01-01"), tvdb(1, 2, "", "2020-01-01")}
 	checkMatch(t, "unequal day", tv, []programme{ep("only", "Pilot", "Pilot", "2020-01-01", "")})
@@ -138,9 +148,36 @@ func TestMatchNumbers(t *testing.T) {
 	tv = []tvdbEpisode{tvdb(1, 1, "An Unearthly Child", "1963-11-23")}
 	checkMatch(t, "classic", tv, []programme{ep("babies", "Season 1: 1. Space Babies", "Space Babies", "2024-05-11", "")})
 
-	// A remake's original aired long before it.
-	tv = []tvdbEpisode{tvdb(1, 1, "Episode 1", "2024-01-01")}
-	checkMatch(t, "remake", tv, []programme{ep("uk", "Series 1: Episode 1", "Episode 1", "2001-07-09", "")})
+	// A remake's original aired long before it, by title or number.
+	tv = []tvdbEpisode{tvdb(1, 1, "Episode 1", "2024-01-01"), tvdb(1, 2, "Pilot", "2024-01-08")}
+	eps = []programme{
+		ep("uk1", "Series 1: Episode 1", "Episode 1", "2001-07-09", ""),
+		ep("uk2", "Series 1: 2. Pilot", "Pilot", "2001-07-16", ""),
+	}
+	checkMatch(t, "remake", tv, eps)
+
+	// iPlayer dates a box set by its release, weeks before TVDB's broadcasts.
+	tv = []tvdbEpisode{tvdb(4, 1, "Episode 1", "2026-09-29"), tvdb(4, 2, "Episode 2", "2026-10-13"),
+		tvdb(4, 6, "The Line", "2026-11-03")}
+	eps = []programme{
+		ep("e1", "Series 4: Episode 1", "Episode 1", "2026-09-29", "20:00"),
+		ep("e2", "Series 4: Episode 2", "Episode 2", "2026-09-29", ""),
+		ep("e6", "Series 4: 6. The Line", "The Line", "2026-09-29", ""),
+	}
+	checkMatch(t, "box set", tv, eps, "S04E01=e1", "S04E02=e2", "S04E06=e6")
+	// Without episode 1, the release day's other episode is not TVDB's first.
+	checkMatch(t, "box set without episode 1", tv, eps[1:], "S04E02=e2", "S04E06=e6")
+	checkMatch(t, "box set with episode 2 alone", tv, eps[1:2], "S04E02=e2")
+
+	// TVDB lacking episodes names S07E03 "Episode 5"; it aired as BBC's episode 5.
+	tv = []tvdbEpisode{tvdb(7, 3, "Episode 5", "2021-03-19"), tvdb(7, 5, "Episode 8", "2021-03-24")}
+	eps = []programme{ep("rs5", "Series 7: Episode 5", "Episode 5", "2021-03-19", ""),
+		ep("rs8", "Series 7: Episode 8", "Episode 8", "2021-03-24", "")}
+	checkMatch(t, "TVDB gaps", tv, eps, "S07E03=rs5", "S07E05=rs8")
+
+	// A newer series with the same title is not a UK showing.
+	tv = []tvdbEpisode{tvdb(1, 1, "Episode 1", "1975-04-16")}
+	checkMatch(t, "newer remake", tv, []programme{ep("remake", "Series 1: Episode 1", "Episode 1", "2008-11-23", "")})
 
 	// Two BBC episodes with one number are ambiguous.
 	tv = []tvdbEpisode{tvdb(2, 1, "", "")}

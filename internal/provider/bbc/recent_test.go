@@ -36,13 +36,17 @@ func releases(rs []provider.Release) []string {
 
 func TestSeriesFeed(t *testing.T) {
 	var failing atomic.Bool
+	var failures atomic.Int32
 	p := newProviderWith(t, func(key string) (string, bool) {
 		if failing.Load() && key == "/ibl/v1/new-search?q=Doctor Who" {
+			failures.Add(1)
 			return "500 oops", true
 		}
 		return "", false
 	})
-	p.cache.now = func() time.Time { return time.Now().Add(-apiCacheTTL) } // never cache
+	var ahead atomic.Int64 // the cache's clock
+	p.cache.now = func() time.Time { return time.Now().Add(time.Duration(ahead.Load())) }
+	expireCache := func() { ahead.Add(int64(apiCacheTTL)) }
 	ctx := context.Background()
 	p.watch(449991, "Doctor Who (2023)")
 	p.watch(83920, "Days of Honor") // not on iPlayer
@@ -60,11 +64,16 @@ func TestSeriesFeed(t *testing.T) {
 	// Dated when first found, and kept when iPlayer fails.
 	first := rs[0].Published
 	failing.Store(true)
+	expireCache()
 	p.rebuildSeries(ctx)
+	if failures.Load() == 0 {
+		t.Fatal("the rebuild reused cached listings instead of failing")
+	}
 	if rs := p.seriesFeed.recent(); len(rs) != 1 || !rs[0].Published.Equal(first) {
 		t.Errorf("after a failure: %+v", rs)
 	}
 	failing.Store(false)
+	expireCache()
 	p.rebuildSeries(ctx)
 	if rs := p.seriesFeed.recent(); len(rs) != 1 || !rs[0].Published.Equal(first) {
 		t.Errorf("after recovering: %+v", rs)

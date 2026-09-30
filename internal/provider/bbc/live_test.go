@@ -50,14 +50,30 @@ func TestLive(t *testing.T) {
 		if !ok {
 			return
 		}
-		if len(s.Subtitles) != 1 {
-			t.Fatalf("subtitles %+v", s.Subtitles)
+		// One copy per CDN; each must work.
+		if len(s.Subtitles) == 0 {
+			t.Fatal("no subtitles")
 		}
-		srt, err := subtitles.Fetch(ctx, client, s.Subtitles[0], s.Header)
-		if n := bytes.Count(srt, []byte(" --> ")); err != nil || n < 100 {
-			t.Errorf("subtitles: %d cues, %v", n, err)
-		} else {
-			t.Logf("subtitles: %d cues", n)
+		for _, sub := range s.Subtitles {
+			srt, err := subtitles.Fetch(ctx, client, sub, s.Header)
+			if n := bytes.Count(srt, []byte(" --> ")); err != nil || n < 100 {
+				t.Errorf("subtitles: %d cues, %v", n, err)
+			} else {
+				t.Logf("subtitles: %d cues", n)
+			}
+		}
+	})
+
+	// Sonarr's title searches drop parentheses; "Doctor Who" is the classic series.
+	t.Run("series by title", func(t *testing.T) {
+		for title, want := range map[string]int{"Doctor Who 2023": 449991, "Doctor Who": 76107} {
+			if id, ok, err := p.titles.resolve(ctx, title); err != nil || !ok || id != want {
+				t.Errorf("%q is TVDB %d, %v, %v; want %d", title, id, ok, err, want)
+			}
+		}
+		items, err := p.Search(ctx, provider.Query{Kind: provider.Episode, Title: "Doctor Who 2023", Season: 1, Episode: 1})
+		if err != nil || len(items) != 1 {
+			t.Errorf("Doctor Who 2023 S01E01: %+v, %v", items, err)
 		}
 	})
 
@@ -73,7 +89,9 @@ func TestLive(t *testing.T) {
 		}
 		// Titles vary: TVDB's "04/07/2022 (1)" is BBC's "04/07/2022 - Part 1".
 		for _, m := range matched {
-			if m.bbc.aired() != m.tvdb.aired && comparable(m.bbc.OriginalTitle) != comparable(m.tvdb.title) {
+			bt, bn := titleKey(m.bbc.OriginalTitle)
+			tt, tn := titleKey(m.tvdb.title)
+			if m.bbc.aired() != m.tvdb.aired && (bt != tt || bn != tn) {
 				t.Errorf("TVDB S%dE%d %q (%s) matched %q (%s)", m.tvdb.season, m.tvdb.episode,
 					m.tvdb.title, m.tvdb.aired, m.bbc.Subtitle, m.bbc.aired())
 			}

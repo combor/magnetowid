@@ -57,9 +57,10 @@ func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, err
 	if err != nil {
 		return provider.Stream{}, err
 	}
-	// BBC's subtitles name speakers by colour and describe sounds.
-	if c := sel.captions(); c != "" {
-		s.Subtitles = []provider.Subtitle{{URL: c, Format: provider.TTML, Language: "eng", SDH: true}}
+	// BBC's subtitles name speakers by colour and describe sounds. Each CDN's
+	// copy is listed; the downloader saves the first that works.
+	for _, u := range sel.captions() {
+		s.Subtitles = append(s.Subtitles, provider.Subtitle{URL: u, Format: provider.TTML, Language: "eng", SDH: true})
 	}
 	return s, nil
 }
@@ -103,15 +104,14 @@ func (m media) urls(format string) []string {
 	return urls
 }
 
-func (s selection) captions() string {
+// Return the subtitles' URLs on each CDN, in priority order.
+func (s selection) captions() []string {
 	for _, m := range s.Media {
-		if m.Kind == "captions" {
-			if urls := m.urls("plain"); len(urls) > 0 {
-				return urls[0]
-			}
+		if urls := m.urls("plain"); m.Kind == "captions" && len(urls) > 0 {
+			return urls
 		}
 	}
-	return ""
+	return nil
 }
 
 // Try each mediaset until one has HLS video.
@@ -129,14 +129,14 @@ func (p *Provider) selectMedia(ctx context.Context, vpid string) (selection, err
 		switch {
 		case sel.Result == "geolocation" || sel.Result == "notukerror":
 			return selection{}, fmt.Errorf("%w: BBC iPlayer streams only to the UK (%s)", provider.ErrUnavailable, sel.Result)
+		case err != nil && !apiErr.permanent():
+			return selection{}, err // e.g. HTTP 503, whatever the result says
 		case sel.Result != "":
 			last = sel.Result // e.g. selectionunavailable
 			continue
-		case err != nil && apiErr.permanent():
+		case err != nil:
 			last = err.Error()
 			continue
-		case err != nil:
-			return selection{}, err
 		case jsonErr != nil:
 			return selection{}, fmt.Errorf("bbc: decoding media selection: %w", jsonErr)
 		}
@@ -191,11 +191,12 @@ func (p *Provider) hlsStream(ctx context.Context, sel selection) (provider.Strea
 }
 
 // Add the 1080p rendition to the master if the origin serves it, keeping the
-// best listed variant's audio. bitrate is the media selector's for 1080p video.
-// Failures keep the master as it was.
+// best listed variant's muxed audio. bitrate is the media selector's for
+// 1080p video. Failures keep the master as it was, as do masters with separate
+// audio, which the added variant would lose.
 func (p *Provider) addFullHD(ctx context.Context, s provider.Stream, bitrate int) string {
 	m, ok, err := hls.Load(ctx, p.client, s)
-	if err != nil || !ok || m.Video.Height < 720 || !videoTrack.MatchString(m.Video.URI) {
+	if err != nil || !ok || m.Audio != "" || m.Video.Height < 720 || !videoTrack.MatchString(m.Video.URI) {
 		return s.Playlist
 	}
 	uri := videoTrack.ReplaceAllString(m.Video.URI, fullHDTrack)

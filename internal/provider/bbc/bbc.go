@@ -73,31 +73,21 @@ func (p *Provider) Search(ctx context.Context, q provider.Query) ([]provider.Ite
 	return nil, nil
 }
 
-// Title searches use BBC's series and episode numbers. TVDB ID searches map
-// TVDB's instead; see SearchTVDB.
+// Episodes always get TVDB's numbering: a title search first finds the TVDB
+// series of that title, then searches as SearchTVDB does. BBC's numbering
+// alone would make 2024's Space Babies classic Doctor Who's S01E01.
 func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]provider.Item, error) {
-	if q.Season <= 0 {
+	tvdbID, ok, err := p.titles.resolve(ctx, q.Title)
+	if err != nil {
+		p.log.Warn("TVDB title lookup failed; no results", "title", q.Title, "err", err)
 		return nil, nil
 	}
-	shows, err := p.findShows(ctx, q.Title)
-	if err != nil || len(shows) == 0 {
-		return nil, err
+	if !ok {
+		p.log.Debug("the title names no single TVDB series; no results", "title", q.Title)
+		return nil, nil
 	}
-	if len(shows) > 1 {
-		p.log.Warn("several BBC programmes match; using the first", "title", q.Title, "count", len(shows))
-	}
-	eps, err := p.episodes(ctx, shows[0].ID)
-	if err != nil {
-		return nil, err
-	}
-	var items []provider.Item
-	for _, e := range eps {
-		l := e.label()
-		if l.series == q.Season && l.episode > 0 && (q.Episode == 0 || l.episode == q.Episode) {
-			items = append(items, episodeItem(e, q.Season, l.episode))
-		}
-	}
-	return items, nil
+	_, items, err := p.SearchTVDB(ctx, tvdbID, q)
+	return items, err
 }
 
 // Return containers titled exactly as title, in search order.

@@ -4,6 +4,8 @@ import (
 	"cmp"
 	"regexp"
 	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/combor/magnetowid/internal/provider"
@@ -15,30 +17,40 @@ type pair struct {
 	bbc  programme
 }
 
-// Remakes' originals predate them; acquired series air in the UK later.
-const remakeGap = 7 * 24 * time.Hour
+const (
+	// A remake's original aired years before it. iPlayer dates box sets by
+	// their release, weeks or months before TVDB's weekly air dates.
+	remakeGap = 365 * 24 * time.Hour
+	// Acquired series reach iPlayer within a few years; a same-titled series
+	// from long after, such as a remake, is another series.
+	acquiredGap = 5 * 365 * 24 * time.Hour
+)
 
 // match pairs TVDB episodes with BBC's, one to one, in passes of decreasing
 // certainty:
 //
 //  1. titles unique on both sides, e.g. "The Reality War" or "29/09/2026";
-//  2. UK air dates, in order when several episodes share a day;
+//  2. UK air dates, in order when several episodes share a day and each side
+//     has as many that day;
 //  3. air dates a day apart, when only one episode on each side qualifies;
 //  4. BBC's series and episode numbers, e.g. "Series 4: Episode 3".
 //
-// Passes 3 and 4 reject pairs with different titles. Pass 4 rejects BBC
-// episodes that aired over a week before TVDB's, such as a remake's original.
+// Passes 3 and 4 reject pairs with different titles. Passes 1 and 4 reject BBC
+// episodes that aired over a year before TVDB's, such as a remake's original,
+// and pass 4 those that aired over five years after, such as a remake.
 func match(tv []tvdbEpisode, eps []programme) []pair {
 	ts := make([]side, len(tv))
 	for i, e := range tv {
-		ts[i] = side{title: comparable(e.title), aired: day(e.aired), season: e.season, episode: e.episode, index: i}
+		title, n := titleKey(e.title)
+		ts[i] = side{title: title, titleNumber: n, aired: day(e.aired), season: e.season, episode: e.episode, index: i}
 	}
 	bs := make([]side, len(eps))
 	for i, e := range eps {
 		l := e.label()
 		v, _ := mainVersion(e.Versions)
-		bs[i] = side{title: comparable(l.title), aired: day(e.aired()), season: l.series, episode: l.episode,
-			broadcast: parseTime(v.FirstBroadcast), index: i}
+		title, n := titleKey(l.title)
+		bs[i] = side{title: title, titleNumber: n, aired: day(e.aired()), season: l.series, episode: l.episode,
+			position: e.ParentPosition, broadcast: parseTime(v.FirstBroadcast), index: i}
 	}
 	m := matcher{tv: ts, bbc: bs}
 	m.byTitle()
@@ -57,12 +69,16 @@ func match(tv []tvdbEpisode, eps []programme) []pair {
 
 type side struct {
 	title           string    // comparable, "" if generic
+	titleNumber     int       // N of a generic title such as "Episode N", else 0
 	aired           time.Time // zero if unknown
 	season, episode int       // BBC's series and position; 0 if none
-	broadcast       time.Time // BBC's, to order episodes on the same day
-	index           int
-	matched         bool
-	match           int // for TVDB episodes, the BBC episode's index
+	// BBC's, to order episodes on the same day: iPlayer lists EastEnders'
+	// "Part 2" first, and some broadcasts have no time.
+	position  int
+	broadcast time.Time
+	index     int
+	matched   bool
+	match     int // for TVDB episodes, the BBC episode's index
 }
 
 type matcher struct {
@@ -80,7 +96,7 @@ func (m *matcher) byTitle() {
 	}
 	tvTitles, bbcTitles := titles(m.tv), titles(m.bbc)
 	for t, is := range tvTitles {
-		if js := bbcTitles[t]; len(is) == 1 && len(js) == 1 {
+		if js := bbcTitles[t]; len(is) == 1 && len(js) == 1 && !predates(m.bbc[js[0]], m.tv[is[0]]) {
 			m.link(is[0], js[0])
 		}
 	}
@@ -96,25 +112,52 @@ func titles(ss []side) map[string][]int {
 	return byTitle
 }
 
+// Whole days must agree: a box set shares one date, so with an episode
+// missing, the day's remaining counts could agree by chance.
 func (m *matcher) bySameDay() {
 	tvDays, bbcDays := days(m.tv), days(m.bbc)
+	tvTotal, bbcTotal := dayTotals(m.tv), dayTotals(m.bbc)
 	for d, is := range tvDays {
 		js := bbcDays[d]
-		if len(is) != len(js) {
+		if len(is) != len(js) || tvTotal[d] != bbcTotal[d] {
 			continue
 		}
 		slices.SortFunc(is, func(a, b int) int {
 			return cmp.Or(cmp.Compare(m.tv[a].season, m.tv[b].season), cmp.Compare(m.tv[a].episode, m.tv[b].episode))
 		})
+		// Positions order the day only if every episode has one.
+		positioned := !slices.ContainsFunc(js, func(j int) bool { return m.bbc[j].position == 0 })
 		slices.SortFunc(js, func(a, b int) int {
 			x, y := m.bbc[a], m.bbc[b]
+			byPosition := 0
+			if positioned {
+				byPosition = cmp.Compare(x.position, y.position)
+			}
 			return cmp.Or(cmp.Compare(x.season, y.season), cmp.Compare(x.episode, y.episode),
-				x.broadcast.Compare(y.broadcast), cmp.Compare(x.index, y.index))
+				byPosition, x.broadcast.Compare(y.broadcast), cmp.Compare(x.index, y.index))
 		})
+		// A box set's release date can match TVDB's first episode alone.
+		agree := true
+		for k := range is {
+			agree = agree && !renumbered(m.tv[is[k]], m.bbc[js[k]])
+		}
+		if !agree {
+			continue
+		}
 		for k := range is {
 			m.link(is[k], js[k])
 		}
 	}
+}
+
+func dayTotals(ss []side) map[time.Time]int {
+	totals := map[time.Time]int{}
+	for _, s := range ss {
+		if !s.aired.IsZero() {
+			totals[s.aired]++
+		}
+	}
+	return totals
 }
 
 // Group unmatched episodes by air date.
@@ -140,7 +183,8 @@ func (m *matcher) byNearDay() {
 		if !ok {
 			continue
 		}
-		if back, ok := only(m.tv, func(t side) bool { return near(t, m.bbc[j]) }); ok && back == i {
+		// Same-day pairs are pass 2's to accept or refuse.
+		if back, ok := only(m.tv, func(t side) bool { return near(t, m.bbc[j]) }); ok && back == i && !t.aired.Equal(m.bbc[j].aired) {
 			links = append(links, [2]int{i, j})
 		}
 	}
@@ -178,15 +222,31 @@ func (m *matcher) byNumber() {
 			continue
 		}
 		b := m.bbc[js[0]]
-		if b.matched || contradicts(t, b) || (!t.aired.IsZero() && !b.aired.IsZero() && b.aired.Before(t.aired.Add(-remakeGap))) {
+		if b.matched || contradicts(t, b) || predates(b, t) || postdates(b, t) {
 			continue
 		}
 		m.link(i, js[0])
 	}
 }
 
+// Report whether BBC's episode b aired too long before TVDB's t to be it.
+func predates(b, t side) bool {
+	return !t.aired.IsZero() && !b.aired.IsZero() && b.aired.Before(t.aired.Add(-remakeGap))
+}
+
+// Report whether BBC's episode b aired too long after TVDB's t to be it.
+func postdates(b, t side) bool {
+	return !t.aired.IsZero() && !b.aired.IsZero() && b.aired.After(t.aired.Add(acquiredGap))
+}
+
 func contradicts(a, b side) bool {
-	return a.title != "" && b.title != "" && a.title != b.title
+	return (a.title != "" && b.title != "" && a.title != b.title) || renumbered(a, b)
+}
+
+// Generic titles still disagree when their numbers do: "Episode 1" is not
+// "Episode 2", though TVDB's S07E03 can be "Episode 5" when it lacks episodes.
+func renumbered(a, b side) bool {
+	return a.titleNumber > 0 && b.titleNumber > 0 && a.titleNumber != b.titleNumber
 }
 
 var (
@@ -196,12 +256,14 @@ var (
 	genericTitle = regexp.MustCompile(`^(?:(?:episode|part|chapter|show|programme|week|day)\s*)?\d+$|^(?:tba|tbc|tbd)$`)
 )
 
-func comparable(title string) string {
+// Return the title for comparison, or for generic titles, "" and their number.
+func titleKey(title string) (string, int) {
 	t := provider.NormalizeTitle(partNumber.ReplaceAllString(title, ""))
-	if genericTitle.MatchString(t) {
-		return ""
+	if !genericTitle.MatchString(t) {
+		return t, 0
 	}
-	return t
+	n, _ := strconv.Atoi(strings.TrimLeft(t, "abcdefghijklmnopqrstuvwxyz "))
+	return "", n
 }
 
 func day(date string) time.Time {

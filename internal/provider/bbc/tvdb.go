@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,7 +21,8 @@ import (
 // episodes, which are matched to BBC's by title, air date and number.
 
 const (
-	skyhookURL = "https://skyhook.sonarr.tv/v1/tvdb/shows/en"
+	skyhookURL       = "https://skyhook.sonarr.tv/v1/tvdb/shows/en"
+	skyhookSearchURL = "https://skyhook.sonarr.tv/v1/tvdb/search/en/"
 	// Leave Sonarr time to fall back to title search.
 	lookupTimeout = 10 * time.Second
 	cacheTTL      = 24 * time.Hour
@@ -116,81 +119,113 @@ func (s series) searchTitles() []string {
 
 // Safe for concurrent use.
 type titleLookup struct {
-	client *http.Client
-	url    string
+	client    *http.Client
+	url       string
+	searchURL string
 
 	mu    sync.Mutex
-	cache map[int]cachedSeries
+	shows map[int]cachedLookup[series]
+	ids   map[string]cachedLookup[int] // by normalized title; 0 if none
 }
 
-type cachedSeries struct {
-	series  series
+type cachedLookup[V any] struct {
+	value   V
 	err     error
 	expires time.Time
 }
 
 func newTitleLookup(client *http.Client) *titleLookup {
-	return &titleLookup{client: client, url: skyhookURL, cache: make(map[int]cachedSeries)}
+	return &titleLookup{client: client, url: skyhookURL, searchURL: skyhookSearchURL,
+		shows: make(map[int]cachedLookup[series]), ids: make(map[string]cachedLookup[int])}
 }
 
 func (l *titleLookup) series(ctx context.Context, tvdbID int) (series, error) {
+	return remember(ctx, &l.mu, l.shows, tvdbID, func(ctx context.Context) (series, error) {
+		return l.lookup(ctx, tvdbID)
+	})
+}
+
+// Cache results for a day and failures for 5 minutes, but not caller cancellation.
+func remember[K comparable, V any](ctx context.Context, mu *sync.Mutex, cache map[K]cachedLookup[V], key K, lookup func(context.Context) (V, error)) (V, error) {
 	now := time.Now()
-	l.mu.Lock()
-	hit, ok := l.cache[tvdbID]
-	l.mu.Unlock()
+	mu.Lock()
+	hit, ok := cache[key]
+	mu.Unlock()
 	if ok && now.Before(hit.expires) {
-		return hit.series, hit.err
+		return hit.value, hit.err
 	}
 	lookupCtx, cancel := context.WithTimeout(ctx, lookupTimeout)
 	defer cancel()
-	s, err := l.lookup(lookupCtx, tvdbID)
+	v, err := lookup(lookupCtx)
 	ttl := cacheTTL
 	if err != nil {
 		if ctx.Err() != nil {
-			return s, err // caller cancellation is not a lookup failure
+			return v, err
 		}
 		ttl = failureTTL
 	}
-	l.mu.Lock()
-	for k, v := range l.cache {
-		if now.After(v.expires) {
-			delete(l.cache, k)
+	mu.Lock()
+	for k, e := range cache {
+		if now.After(e.expires) {
+			delete(cache, k)
 		}
 	}
-	l.cache[tvdbID] = cachedSeries{series: s, err: err, expires: now.Add(ttl)}
-	l.mu.Unlock()
-	return s, err
+	cache[key] = cachedLookup[V]{value: v, err: err, expires: now.Add(ttl)}
+	mu.Unlock()
+	return v, err
+}
+
+// resolve returns the TVDB series named title as Sonarr cleans titles, e.g.
+// "Doctor Who 2023" for Doctor Who (2023) or "Traitors" for The Traitors.
+// Alternative titles count only if no main title matches. ok is false unless
+// exactly one series matches: "Traitors" also names Channel 4's drama.
+func (l *titleLookup) resolve(ctx context.Context, title string) (tvdbID int, ok bool, err error) {
+	want := provider.NormalizeTitle(title)
+	if want == "" {
+		return 0, false, nil
+	}
+	id, err := remember(ctx, &l.mu, l.ids, want, func(ctx context.Context) (int, error) {
+		var found []struct {
+			TVDBID       int      `json:"tvdbId"`
+			Title        string   `json:"title"`
+			Alternatives []titled `json:"alternativeTitles"`
+		}
+		if err := l.get(ctx, l.searchURL+"?"+url.Values{"term": {title}}.Encode(), &found); err != nil {
+			return 0, err
+		}
+		var byTitle, byAlias []int
+		for _, s := range found {
+			switch {
+			case provider.NormalizeTitle(s.Title) == want:
+				byTitle = append(byTitle, s.TVDBID)
+			case slices.ContainsFunc(s.Alternatives, func(a titled) bool { return provider.NormalizeTitle(a.Title) == want }):
+				byAlias = append(byAlias, s.TVDBID)
+			}
+		}
+		if len(byTitle) == 0 {
+			byTitle = byAlias
+		}
+		if len(byTitle) != 1 {
+			return 0, nil
+		}
+		return byTitle[0], nil
+	})
+	return id, id > 0, err
 }
 
 func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 	var show struct {
-		Title        string `json:"title"`
-		Alternatives []struct {
-			Title string `json:"title"`
-		} `json:"alternativeTitles"`
-		Episodes []struct {
+		Title        string   `json:"title"`
+		Alternatives []titled `json:"alternativeTitles"`
+		Episodes     []struct {
 			SeasonNumber  int    `json:"seasonNumber"`
 			EpisodeNumber int    `json:"episodeNumber"`
 			Title         string `json:"title"`
 			AirDate       string `json:"airDate"`
 		} `json:"episodes"`
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, l.url+"/"+strconv.Itoa(tvdbID), nil)
-	if err != nil {
+	if err := l.get(ctx, l.url+"/"+strconv.Itoa(tvdbID), &show); err != nil {
 		return series{}, err
-	}
-	req.Header.Set("User-Agent", "magnetowid (https://github.com/combor/magnetowid)")
-	resp, err := l.client.Do(req)
-	if err != nil {
-		return series{}, fmt.Errorf("skyhook: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return series{}, fmt.Errorf("skyhook: HTTP %d", resp.StatusCode)
-	}
-	// Skyhook lists every episode: about 2 MB for EastEnders.
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(&show); err != nil {
-		return series{}, fmt.Errorf("skyhook: %w", err)
 	}
 	if show.Title == "" {
 		return series{}, fmt.Errorf("skyhook: TVDB %d has no title", tvdbID)
@@ -211,4 +246,29 @@ func (l *titleLookup) lookup(ctx context.Context, tvdbID int) (series, error) {
 		})
 	}
 	return s, nil
+}
+
+type titled struct {
+	Title string `json:"title"`
+}
+
+func (l *titleLookup) get(ctx context.Context, url string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "magnetowid (https://github.com/combor/magnetowid)")
+	resp, err := l.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("skyhook: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("skyhook: HTTP %d", resp.StatusCode)
+	}
+	// Skyhook lists every episode: about 2 MB for EastEnders.
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(out); err != nil {
+		return fmt.Errorf("skyhook: %w", err)
+	}
+	return nil
 }

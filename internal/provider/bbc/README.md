@@ -19,8 +19,11 @@ title, and pairs each TVDB episode with one of iPlayer's:
    *29/09/2026* is TVDB's S42E155.
 3. **Air date a day apart**, if only one episode on each side qualifies.
 4. **iPlayer's numbering**, e.g. "Series 4: Episode 3" as S04E03, unless the
-   titles differ or iPlayer's episode aired over a week before TVDB's, as a
-   remake's original would.
+   titles differ.
+
+Titles and numbers never pair an iPlayer episode that aired over a year
+before TVDB's, as a remake's original would. iPlayer dates box sets by their
+release, which can precede TVDB's weekly air dates by weeks.
 
 Releases use Sonarr's title and TVDB's numbering. TVDB's qualifiers "(2023)"
 and "(UK)" are dropped, so *Doctor Who (2023)* finds iPlayer's *Doctor Who*;
@@ -28,8 +31,12 @@ other countries' remain, so *The Traitors (US)* finds *The Traitors US*.
 Alternative titles are tried only if Sonarr's finds nothing. Of several
 programmes with the same title, the one matching most episodes is used.
 
-If the ID search finds nothing, Sonarr searches by title. Title searches need
-iPlayer's exact title and use iPlayer's series and episode numbers.
+Title searches, which Sonarr makes after an ID search finds nothing, first
+find the TVDB series with that title on Skyhook, as Sonarr writes it, e.g.
+"Doctor Who 2023", then search as by ID. Alternative titles count only if
+no main title matches, and exactly one series must: "Traitors" names both
+Channel 4's *Traitors* and *The Traitors*, so it finds nothing. iPlayer's
+numbering alone would make 2024's *Space Babies* classic Doctor Who's S01E01.
 
 Skyhook data is cached for a day and failed lookups for 5 minutes; iPlayer's
 listings for 10 minutes. Allow access to `skyhook.sonarr.tv`.
