@@ -31,9 +31,7 @@ type jobView struct {
 	Provider string
 	Priority string // empty for normal priority
 	Percent  int
-	Fraction float64 // 0..1, for smooth progress between refreshes
-	Rate     float64 // average fraction per second while downloading
-	Size     string  // done of estimated total, or empty if unknown
+	Size     string // done of estimated total, or empty if unknown
 	Left     string
 	Added    string
 	Status   string
@@ -93,7 +91,6 @@ func newJobView(j downloader.Job, retry, now time.Time) jobView {
 		Category: j.Category,
 		Provider: j.Ref.Provider,
 		Percent:  min(int(j.Fraction*100), 100),
-		Fraction: j.Fraction,
 		Added:    ago(now.Sub(j.Added)),
 		Status:   "Queued",
 		Tone:     "neutral",
@@ -118,9 +115,6 @@ func newJobView(j downloader.Job, retry, now time.Time) jobView {
 	case j.Status == downloader.StatusDownloading:
 		v.Status = "Downloading"
 		v.Left = timeLeft(j.TimeLeft(now))
-		if elapsed := now.Sub(j.Started).Seconds(); j.Fraction > 0 && elapsed > 0 {
-			v.Rate = j.Fraction / elapsed
-		}
 		if j.Attempts > 1 {
 			v.Attempt = j.Attempts
 		}

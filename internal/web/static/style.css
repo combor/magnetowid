@@ -233,11 +233,6 @@ code {
 .pill-downloading .dot { animation: pulse 2s ease-out infinite; }
 .pill-paused { background: var(--warn-soft); color: var(--warn); }
 
-.pill-offline { display: none; }
-[data-offline] .pill { background: var(--danger-soft); color: var(--danger); }
-[data-offline] .pill .dot { animation: blink 1.2s ease-in-out infinite; }
-[data-offline] .pill-label { display: none; }
-[data-offline] .pill-offline { display: inline; }
 
 /* Buttons and forms */
 
@@ -431,6 +426,8 @@ code {
   background:
     linear-gradient(100deg, transparent 20%, rgb(255 255 255 / 0.38) 50%, transparent 80%) -150% 0 / 45% 100% no-repeat,
     var(--stripe);
+  /* As long as a refresh, so the bar glides from one reading to the next. */
+  transition: width 1s linear;
   animation: sheen 2.8s ease-in-out infinite;
 }
 
@@ -753,8 +750,6 @@ code {
   70%, 100% { box-shadow: 0 0 0 7px transparent; }
 }
 
-@keyframes blink { 50% { opacity: 0.35; } }
-
 @keyframes eq {
   0%, 100% { transform: scaleY(0.35); }
   50% { transform: scaleY(1); }
@@ -771,7 +766,10 @@ code {
     transition: none !important;
   }
 
-  .progress::-webkit-progress-value { animation: none; }
+  .progress::-webkit-progress-value {
+    animation: none;
+    transition: none;
+  }
 }
 
 /* Phones */

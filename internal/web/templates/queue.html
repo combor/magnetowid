@@ -1,7 +1,6 @@
 {{define "head"}}
 <meta name="htmx-config" content='{"includeIndicatorCSS": false}'>
 <script src="/ui/static/htmx-4.0.0.min.js" defer></script>
-<script src="/ui/static/app.js" defer></script>
 {{- end}}
 
 {{define "content" -}}
@@ -26,7 +25,6 @@
       <span class="pill pill-{{.State}}">
         <span class="dot" aria-hidden="true"></span>
         <span class="pill-label">{{.StateLabel}}</span>
-        <span class="pill-offline">Reconnecting…</span>
       </span>
       <form method="post" action="/ui/logout">
         <button class="btn btn-ghost" type="submit" aria-label="Sign out">
@@ -61,9 +59,9 @@
     {{- with .Specs}}
     <p class="specs">{{range .}}<span>{{.}}</span>{{end}}</p>
     {{- end}}
-    <progress class="progress" max="100" value="{{.Percent}}" data-fraction="{{.Fraction}}" data-rate="{{.Rate}}" aria-labelledby="now-title">{{.Percent}}%</progress>
+    <progress class="progress" max="100" value="{{.Percent}}" aria-labelledby="now-title">{{.Percent}}%</progress>
     <div class="hero-stats">
-      <p class="percent"><span class="percent-num">{{.Percent}}</span><span class="percent-sign">%</span></p>
+      <p class="percent">{{.Percent}}<span class="percent-sign">%</span></p>
       <p class="stats">
         {{- with .Size}}<span>{{.}}</span>{{end -}}
         <span>{{.Left}}</span>

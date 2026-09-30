@@ -233,7 +233,7 @@ func TestStaticFiles(t *testing.T) {
 	if r := get(t, srv, "/ui/static/htmx-4.0.0.min.js", nil, "If-None-Match", tag); tag == "" || r.status != http.StatusNotModified {
 		t.Errorf("revalidating ETag %q = %d", tag, r.status)
 	}
-	for _, name := range []string{"style.css", "app.js", "icon.svg"} {
+	for _, name := range []string{"style.css", "icon.svg"} {
 		if r := get(t, srv, "/ui/static/"+name, nil); r.status != http.StatusOK {
 			t.Errorf("%s = %d", name, r.status)
 		}
@@ -265,8 +265,7 @@ func TestQueueView(t *testing.T) {
 
 	a := v.Active
 	if a == nil || a.Title != "Ranczo" || a.Episode != "S02E01" || a.Percent != 42 || a.Status != "Downloading" ||
-		a.Size != "520 MB of ~1.2 GB" || a.Left != "about 8 min left" || a.Attempt != 2 || a.Added != "5 min ago" ||
-		a.Fraction != 0.42 || a.Rate < 0.42/360-1e-9 || a.Rate > 0.42/360+1e-9 {
+		a.Size != "520 MB of ~1.2 GB" || a.Left != "about 8 min left" || a.Attempt != 2 || a.Added != "5 min ago" {
 		t.Errorf("active = %+v", a)
 	}
 	var next []string
@@ -320,7 +319,7 @@ func TestRenderStates(t *testing.T) {
 		{newQueueView(nil, true, nil, "", now), []string{"The queue is empty", "Downloads are paused."}},
 		{newQueueView([]downloader.Job{running}, false, nil, "", now), []string{"Now downloading", "Hydrozagadka</span>", ">1971<",
 			"<span>Polish</span><span>1080p</span><span>WEB-DL</span><span>AAC</span><span>H.264</span>",
-			`value="0" data-fraction="0" data-rate="0"`, "estimating…"}},
+			`value="0"`, "estimating…"}},
 		{newQueueView([]downloader.Job{running, failing}, false, nil, "", now), []string{"Up next", "Retrying in", "&lt;b&gt;boom&lt;/b&gt;"}},
 		{newQueueView([]downloader.Job{failing}, false, nil, "", now), []string{"Queued</h2>", `data-state="waiting"`}},
 	} {
