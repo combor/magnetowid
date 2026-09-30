@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   live:
-    name: TVP, Skyhook and Wikidata
+    name: TVP, BBC iPlayer, Skyhook and Wikidata
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:

@@ -23,6 +23,7 @@ import (
 	"github.com/combor/magnetowid/internal/newznab"
 	"github.com/combor/magnetowid/internal/probe"
 	"github.com/combor/magnetowid/internal/provider"
+	"github.com/combor/magnetowid/internal/provider/bbc"
 	"github.com/combor/magnetowid/internal/provider/tvp"
 	"github.com/combor/magnetowid/internal/sabnzbd"
 	"github.com/combor/magnetowid/internal/store"
@@ -90,8 +91,13 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 	if err != nil {
 		return err
 	}
+	bbcProvider, err := bbc.New(httpClient, log, db)
+	if err != nil {
+		return err
+	}
 	providers := provider.NewRegistry(
 		tvpProvider,
+		bbcProvider,
 	)
 
 	queue, err := downloader.New(dir, db, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)

@@ -35,16 +35,36 @@ type Master struct {
 	AudioLanguage string // RFC 5646 LANGUAGE tag, e.g. "pl"; empty if absent
 }
 
-// Load selects streams from an HLS master playlist. Non-master playlists return
-// ok=false; URLs without a .m3u8 suffix are not fetched.
+// Load selects streams from an HLS master playlist, s.Playlist if set. Non-master
+// playlists return ok=false; URLs without a .m3u8 suffix are not fetched.
 func Load(ctx context.Context, client *http.Client, s provider.Stream) (m Master, ok bool, err error) {
 	base, err := url.Parse(s.URL)
 	if err != nil || !strings.HasSuffix(strings.ToLower(base.Path), ".m3u8") {
 		return Master{}, false, nil
 	}
+	playlist := s.Playlist
+	if playlist == "" {
+		if playlist, base, err = fetch(ctx, client, s); err != nil {
+			return Master{}, false, fmt.Errorf("fetching playlist: %w", err)
+		}
+	}
+
+	video, audio, ok := selectRenditions(playlist)
+	if !ok {
+		return Master{}, false, nil
+	}
+	video.URI = resolve(base, video.URI)
+	if audio.uri != "" {
+		audio.uri = resolve(base, audio.uri)
+	}
+	return Master{Video: video, Audio: audio.uri, AudioLanguage: audio.language}, true, nil
+}
+
+// Return the playlist and its URL after redirects.
+func fetch(ctx context.Context, client *http.Client, s provider.Stream) (string, *url.URL, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.URL, nil)
 	if err != nil {
-		return Master{}, false, err
+		return "", nil, err
 	}
 	for k, vs := range s.Header {
 		for _, v := range vs {
@@ -53,27 +73,17 @@ func Load(ctx context.Context, client *http.Client, s provider.Stream) (m Master
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return Master{}, false, fmt.Errorf("fetching playlist: %w", err)
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Master{}, false, fmt.Errorf("fetching playlist: HTTP %d", resp.StatusCode)
+		return "", nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return Master{}, false, fmt.Errorf("fetching playlist: %w", err)
+		return "", nil, err
 	}
-
-	video, audio, ok := selectRenditions(string(body))
-	if !ok {
-		return Master{}, false, nil
-	}
-	base = resp.Request.URL // after redirects
-	video.URI = resolve(base, video.URI)
-	if audio.uri != "" {
-		audio.uri = resolve(base, audio.uri)
-	}
-	return Master{Video: video, Audio: audio.uri, AudioLanguage: audio.language}, true, nil
+	return string(body), resp.Request.URL, nil
 }
 
 type rendition struct {

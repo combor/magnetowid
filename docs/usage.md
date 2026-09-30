@@ -5,7 +5,9 @@ magnetowid exposes two APIs for Sonarr and Radarr:
 - **Newznab** at `/{provider}/api` for catalogue searches.
 - **SABnzbd** at `/api` for downloads, progress, and completed MP4 files.
 
-Supported sites: **TVP VOD** (`tvp`). See the [TVP VOD notes](../internal/provider/tvp/README.md).
+Supported sites: **TVP VOD** (`tvp`) and **BBC iPlayer** (`bbc`). See the
+[TVP VOD notes](../internal/provider/tvp/README.md) and the
+[BBC iPlayer notes](../internal/provider/bbc/README.md).
 
 ## Install and run
 
@@ -109,11 +111,11 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
    - Category: `tv` (Sonarr) or `movies` (Radarr).
    - Priority: higher-priority jobs run first, one at a time. **Paused** queues the job without starting it. See [Pausing downloads](#pausing-downloads).
 2. **Indexer:** Settings → Indexers → **Newznab**, one per site.
-   - Name: e.g. "TVP VOD".
-   - URL: `http://<host>:8484/tvp`, API path `/api`, the same API key.
+   - Name: e.g. "TVP VOD" or "BBC iPlayer".
+   - URL: `http://<host>:8484/tvp` or `http://<host>:8484/bbc`, API path `/api`, the same API key.
    - Categories: 5000, 5040 (Sonarr) or 2000, 2040 (Radarr).
    - **Download Client:** select `magnetowid` to route its releases correctly.
-3. **Language (Radarr):** under Settings → Profiles, set **Language** to **Any**,
+3. **Language (Radarr, TVP VOD):** under Settings → Profiles, set **Language** to **Any**,
    or **Polish** for Polish audio only. The default, original language, rejects
    foreign films with TVP's Polish audio. Sonarr profiles have no language setting.
 
@@ -213,7 +215,8 @@ Include the steps to reproduce and any relevant error message, with API keys rem
   series title, often English; a different site title requires TVDB ID support.
   See each site's notes.
 - **Episode numbers:** differences from TVDB require provider-specific mapping.
-  This applies to both search and RSS; TVP's soap mapping has its own limits.
+  This applies to both search and RSS; TVP's soap mapping and BBC's matching
+  by title and air date have their own limits.
 - **Availability:** DRM, paid, region-blocked, and unreadable streams are omitted
   from results. Availability can still change between search and download.
 - **Streams:** release names use the selected stream's resolution, codecs, and
@@ -229,7 +232,8 @@ Include the steps to reproduce and any relevant error message, with API keys rem
 Implement `provider.Provider` (`internal/provider/provider.go`) in a new package under `internal/provider/` and add it to the registry in `cmd/magnetowid/main.go`. The provider:
 
 - searches its catalogue and maps Sonarr/Radarr numbering onto its own;
-- resolves an ID to a stream URL ffmpeg can open, at download time;
+- resolves an ID to a stream URL ffmpeg can open, at download time, and may
+  amend an HLS master playlist, e.g. to add variants the site omits;
 - optionally implements `provider.TVDBSearcher` to find series by TVDB ID, if
   Sonarr's titles don't match the site's;
 - optionally implements `provider.RecentLister` to offer new releases to RSS
@@ -244,7 +248,7 @@ Implement `provider.Provider` (`internal/provider/provider.go`) in a new package
 | `make docker-smoke` | Image build, startup, both APIs | Docker |
 | `make package-smoke` | Install, run, upgrade, and remove packages on Debian, Fedora, and Arch | Docker, GoReleaser |
 | `make integration` | Sonarr/Radarr search, RSS grabs, video and subtitle imports against fake VOD sites | Linux, Docker, ffmpeg with libx264, access to the apps' metadata servers |
-| `make live` | Live TVP, Skyhook, and Wikidata APIs; also runs daily in CI | Network access |
+| `make live` | Live TVP, BBC iPlayer, Skyhook, and Wikidata APIs; also runs daily in CI | Network access; BBC streams need a UK connection |
 
 ## License
 
