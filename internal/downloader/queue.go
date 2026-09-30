@@ -102,7 +102,8 @@ func (j Job) TimeLeft(now time.Time) time.Duration {
 	return time.Duration(float64(now.Sub(j.Started)) * (1 - j.Fraction) / j.Fraction)
 }
 
-const historyRetention = 30 * 24 * time.Hour
+// HistoryRetention is how long finished jobs are kept.
+const HistoryRetention = 30 * 24 * time.Hour
 
 const incompleteDir = ".incomplete"
 
@@ -308,9 +309,20 @@ func (q *Queue) Jobs() []Job {
 // Delete cancels the job and optionally removes its files. It returns false for
 // unknown IDs; a save failure leaves the job unchanged.
 func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
+	return q.discard(id, deleteFiles, false)
+}
+
+// Cancel deletes a job that has not finished, so one that finishes as it is
+// cancelled stays in history to be imported. It returns false for unknown and
+// finished jobs.
+func (q *Queue) Cancel(id string) (bool, error) {
+	return q.discard(id, false, true)
+}
+
+func (q *Queue) discard(id string, deleteFiles, unfinishedOnly bool) (bool, error) {
 	q.mu.Lock()
 	job, ok := q.jobs[id]
-	if !ok {
+	if !ok || (unfinishedOnly && job.Status != StatusQueued && job.Status != StatusDownloading) {
 		q.mu.Unlock()
 		return false, nil
 	}
@@ -506,7 +518,7 @@ func (q *Queue) prune(now time.Time) {
 	var old []string
 	for _, id := range q.order {
 		j := q.jobs[id]
-		if (j.Status == StatusCompleted || j.Status == StatusFailed) && now.Sub(j.Finished) > historyRetention {
+		if (j.Status == StatusCompleted || j.Status == StatusFailed) && now.Sub(j.Finished) > HistoryRetention {
 			old = append(old, id)
 		}
 	}

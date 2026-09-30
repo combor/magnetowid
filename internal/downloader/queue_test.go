@@ -425,6 +425,36 @@ func TestPauseRunningJob(t *testing.T) {
 	waitJob(t, q, id, func(j Job) bool { return j.Status == StatusDownloading && !j.Paused && j.Attempts == 1 })
 }
 
+func TestCancel(t *testing.T) {
+	e := &blockingEngine{started: make(chan string, 2)}
+	q := newQueue(t, t.TempDir(), &fakeProvider{}, e)
+	run(t, q)
+	running := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.started
+	queued := add(t, q, "b", "tv", 0, nzb.Ref{Provider: "fake", ID: "b"})
+	for _, id := range []string{queued, running} {
+		if ok, err := q.Cancel(id); !ok || err != nil {
+			t.Fatalf("Cancel(%s) = %v, %v", id, ok, err)
+		}
+	}
+	if jobs := q.Jobs(); len(jobs) != 0 {
+		t.Errorf("jobs after cancelling = %+v", jobs)
+	}
+	if ok, err := q.Cancel("SABnzbd_nzo_gone"); ok || err != nil {
+		t.Errorf("cancelling an unknown job = %v, %v", ok, err)
+	}
+
+	// A job that finished before the cancel stays for Sonarr/Radarr to import.
+	q = startQueue(t, &fakeProvider{}, &fakeEngine{})
+	done := waitFinished(t, q, add(t, q, "c", "tv", 0, nzb.Ref{Provider: "fake", ID: "c"}))
+	if ok, err := q.Cancel(done.ID); ok || err != nil {
+		t.Errorf("cancelling a finished job = %v, %v", ok, err)
+	}
+	if _, err := os.Stat(done.Storage); len(q.Jobs()) != 1 || err != nil {
+		t.Errorf("finished job after a cancel: %+v, files %v", q.Jobs(), err)
+	}
+}
+
 func TestPauseBeforeDownloadStarts(t *testing.T) {
 	for name, pause := range map[string]func(q *Queue, id string) error{
 		"job":   func(q *Queue, id string) error { _, err := q.PauseJobs(id); return err },
@@ -586,7 +616,7 @@ func TestPruneOldHistory(t *testing.T) {
 	dir := t.TempDir()
 	q := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
 	now := time.Now()
-	old := now.Add(-historyRetention - time.Hour)
+	old := now.Add(-HistoryRetention - time.Hour)
 	set := func(name string, status Status, finished time.Time) string {
 		id := add(t, q, name, "tv", 0, nzb.Ref{Provider: "fake", ID: name})
 		q.mu.Lock()
