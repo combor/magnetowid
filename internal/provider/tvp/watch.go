@@ -44,11 +44,6 @@ var filmWatch = watchKind{
 	},
 }
 
-// Match Radarr's title-and-year identity.
-func filmKey(title string, year int) string {
-	return strconv.Itoa(year) + " " + provider.NormalizeTitle(title)
-}
-
 type watchRecord struct {
 	Added time.Time `json:"added"`
 	// Radarr's title and year, used for release names.
@@ -168,7 +163,7 @@ func (p *Provider) watch(tvdbID int, title string) {
 
 // Do not invalidate the feed: this film was just searched.
 func (p *Provider) watchFilm(title string, year int) {
-	isNew, err := p.watchedFilms.add(filmKey(title, year), watchRecord{Title: title, Year: year})
+	isNew, err := p.watchedFilms.add(provider.FilmKey(title, year), watchRecord{Title: title, Year: year})
 	if !isNew {
 		return
 	}

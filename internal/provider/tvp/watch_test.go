@@ -116,7 +116,7 @@ func TestFilmSearchWatches(t *testing.T) {
 		if failed := tt.title == "Awaria"; (err != nil) != failed {
 			t.Errorf("%s: err = %v", tt.title, err)
 		}
-		r, watched := p.watchedFilms.records[filmKey(tt.title, tt.year)]
+		r, watched := p.watchedFilms.records[provider.FilmKey(tt.title, tt.year)]
 		if watched != tt.watched {
 			t.Errorf("%s %d: watched = %v, want %v", tt.title, tt.year, watched, tt.watched)
 		}
@@ -153,7 +153,7 @@ func TestFilmWatchListPersists(t *testing.T) {
 	}
 	// A film already watched isn't saved again, so saving can't fail.
 	db.Close()
-	if isNew, err := w.add(filmKey("Kler", 2018), watchRecord{Title: "Kler", Year: 2018}); isNew || err != nil {
+	if isNew, err := w.add(provider.FilmKey("Kler", 2018), watchRecord{Title: "Kler", Year: 2018}); isNew || err != nil {
 		t.Errorf("add = %v, %v; want false, nil", isNew, err)
 	}
 }

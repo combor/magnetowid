@@ -24,6 +24,22 @@ restart Sonarr to refresh its indexer capabilities, otherwise cached for up to
 Without a Polish Wikidata title, Sonarr's title must match TVP's. Skyhook is
 Sonarr's internal service and may change without notice.
 
+## Overrides
+
+[Overrides](../../../docs/usage.md#correcting-matches) use TVP's numbering:
+
+- `site_season` is TVP's season, e.g. *Sezon 2*, and episodes are TVP's episode
+  numbers, which can continue across seasons: *Ranczo*'s second season starts
+  at 14.
+- For long soaps, use `site_season` 0 with TVP's absolute numbers: an `offset`
+  of 1870 makes TVDB's episode 1 TVP's episode 1871.
+- IDs end TVP's page URLs, e.g. 381046 in
+  `https://vod.tvp.pl/seriale,18/ranczo-odcinki,316445/odcinek-1,S01E01,381046`.
+  Overrides also accept the URLs.
+
+Sonarr's title search, which follows an ID search that finds nothing, uses
+the series' override too.
+
 ## Long soaps
 
 TVP groups *M jak miłość*, *Klan*, and *Barwy szczęścia* into blocks of 100

@@ -8,8 +8,11 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
+	"sync/atomic"
 
 	bolt "go.etcd.io/bbolt"
 
@@ -33,6 +36,7 @@ type Provider struct {
 	watchedFilms  *watchList
 	seriesFeed    feed
 	filmFeed      feed
+	overrides     atomic.Pointer[provider.Overrides]
 	log           *slog.Logger
 }
 
@@ -63,6 +67,38 @@ func New(client *http.Client, log *slog.Logger, db *bolt.DB) (*Provider, error) 
 
 func (p *Provider) Name() string { return "bbc" }
 
+// Feeds rebuild with new overrides at the next RSS sync.
+func (p *Provider) SetOverrides(o *provider.Overrides) {
+	series, films := o.Changes(p.overrides.Swap(o))
+	p.seriesFeed.forget(series...)
+	if films {
+		p.filmFeed.forget(filmsKey)
+	}
+	p.seriesFeed.markStale()
+	p.filmFeed.markStale()
+}
+
+// BBC pages name programmes and episodes by PID, e.g.
+// https://www.bbc.co.uk/iplayer/episode/m002d3lr/doctor-who-season-2-8-the-reality-war,
+// https://www.bbc.co.uk/iplayer/episodes/p0gglvqn/doctor-who or
+// https://www.bbc.co.uk/programmes/m002d3lr.
+var pagePID = regexp.MustCompile(`^/(?:iplayer/episodes?|programmes)/([^/]+)`)
+
+func (p *Provider) ParseID(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if u, err := url.Parse(ref); err == nil && u.Host != "" {
+		m := pagePID.FindStringSubmatch(u.Path)
+		if (u.Host != "www.bbc.co.uk" && u.Host != "bbc.co.uk") || m == nil {
+			return "", fmt.Errorf("%q is not a BBC programme page", ref)
+		}
+		ref = m[1]
+	}
+	if !pidPattern.MatchString(ref) {
+		return "", fmt.Errorf("%q is neither a BBC programme ID nor a bbc.co.uk URL", ref)
+	}
+	return ref, nil
+}
+
 func (p *Provider) Search(ctx context.Context, q provider.Query) ([]provider.Item, error) {
 	switch q.Kind {
 	case provider.Episode:
@@ -90,8 +126,9 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 	return items, err
 }
 
-// Return containers titled exactly as title, in search order.
-func (p *Provider) findShows(ctx context.Context, title string) ([]programme, error) {
+// Return containers titled exactly as title, in search order, or the one
+// with the given id.
+func (p *Provider) findShows(ctx context.Context, title, id string) ([]programme, error) {
 	want := provider.NormalizeTitle(title)
 	if want == "" {
 		return nil, nil
@@ -102,7 +139,7 @@ func (p *Provider) findShows(ctx context.Context, title string) ([]programme, er
 	}
 	var shows []programme
 	for _, r := range found {
-		if r.container() && provider.NormalizeTitle(r.Title) == want {
+		if r.container() && ((id != "" && r.ID == id) || (id == "" && provider.NormalizeTitle(r.Title) == want)) {
 			shows = append(shows, r)
 		}
 	}
@@ -123,18 +160,22 @@ func episodeItem(e programme, season, episode int) provider.Item {
 
 // Films are one-offs matched by title and year.
 func (p *Provider) searchFilms(ctx context.Context, q provider.Query) ([]provider.Item, error) {
-	want := provider.NormalizeTitle(q.Title)
-	if want == "" {
+	if provider.NormalizeTitle(q.Title) == "" {
 		return nil, nil
 	}
-	found, err := p.search(ctx, q.Title)
-	if err != nil {
-		return nil, err
-	}
+	want := newFilmWant(p.overrides.Load(), q.Title, q.Year)
 	var items []provider.Item
-	for _, r := range found {
-		if filmMatches(r, want, q.Year) {
-			items = append(items, filmItem(r, q.Year))
+	seen := make(map[string]bool)
+	for _, title := range want.titles {
+		found, err := p.search(ctx, title)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range found {
+			if !seen[r.ID] && want.matches(r) {
+				seen[r.ID] = true
+				items = append(items, filmItem(r, q.Year))
+			}
 		}
 	}
 	// Radarr relies on RSS after searching. Watch even found films, which
@@ -143,6 +184,39 @@ func (p *Provider) searchFilms(ctx context.Context, q provider.Query) ([]provide
 		p.watchFilm(q.Title, q.Year)
 	}
 	return items, nil
+}
+
+// filmWant is what a Radarr film matches: the override's programme, or its
+// titles or Radarr's, from about the same year.
+type filmWant struct {
+	id         string
+	titles     []string // to search
+	normalized []string
+	year       int
+	overrides  *provider.Overrides
+}
+
+func newFilmWant(o *provider.Overrides, title string, year int) filmWant {
+	ov, _ := o.Film(title, year)
+	w := filmWant{id: ov.ID, titles: []string{title}, year: year, overrides: o}
+	if len(ov.Titles) > 0 {
+		w.titles = ov.Titles
+	}
+	for _, t := range w.titles {
+		if n := provider.NormalizeTitle(t); n != "" {
+			w.normalized = append(w.normalized, n)
+		}
+	}
+	return w
+}
+
+// Films are one-offs, even when chosen by ID: the film feed lists no others.
+// Programmes pinned to other films are theirs alone.
+func (w filmWant) matches(r programme) bool {
+	if w.id != "" {
+		return r.ID == w.id && r.oneOff()
+	}
+	return !w.overrides.FilmPinned(r.ID) && slices.ContainsFunc(w.normalized, func(n string) bool { return filmMatches(r, n, w.year) })
 }
 
 // BBC's year is usually the release year, sometimes the UK premiere's. Allow

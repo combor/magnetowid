@@ -10,9 +10,12 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -34,6 +37,7 @@ type Provider struct {
 	watchedFilms  *watchList
 	seriesFeed    feed
 	filmFeed      feed
+	overrides     atomic.Pointer[provider.Overrides]
 	// Film title caches are owned by rebuildFilms, which runs serially.
 	originals   map[int64]string
 	lookupTried map[int64]time.Time
@@ -68,6 +72,37 @@ func New(client *http.Client, log *slog.Logger, db *bolt.DB) (*Provider, error) 
 
 func (p *Provider) Name() string { return "tvp" }
 
+// Feeds rebuild with new overrides at the next RSS sync.
+func (p *Provider) SetOverrides(o *provider.Overrides) {
+	series, films := o.Changes(p.overrides.Swap(o))
+	p.seriesFeed.forget(series...)
+	if films {
+		p.filmFeed.forget(filmsKey)
+	}
+	p.seriesFeed.markStale()
+	p.filmFeed.markStale()
+}
+
+// TVP pages end with the product ID, e.g.
+// https://vod.tvp.pl/seriale,18/ranczo-odcinki,316445/odcinek-1,S01E01,381046.
+var pageID = regexp.MustCompile(`,(\d+)/?$`)
+
+func (p *Provider) ParseID(ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if u, err := url.Parse(ref); err == nil && u.Host != "" {
+		m := pageID.FindStringSubmatch(u.Path)
+		if u.Host != "vod.tvp.pl" || m == nil {
+			return "", fmt.Errorf("%q is not a TVP VOD programme page", ref)
+		}
+		ref = m[1]
+	}
+	id, err := strconv.ParseInt(ref, 10, 64)
+	if err != nil || id <= 0 {
+		return "", fmt.Errorf("%q is neither a TVP VOD ID nor a vod.tvp.pl URL", ref)
+	}
+	return strconv.FormatInt(id, 10), nil
+}
+
 type product struct {
 	ID            int64  `json:"id"`
 	Type          string `json:"type"`
@@ -94,28 +129,121 @@ func (p *Provider) searchEpisodes(ctx context.Context, q provider.Query) ([]prov
 	if q.Season <= 0 {
 		return nil, nil
 	}
-	serial, ok, err := p.findSerial(ctx, q.Title)
+	// Sonarr searches by title when its ID search finds nothing, even if an
+	// override decided that; the override decides the title search too.
+	if tvdbID, ok := p.overriddenSeries(q.Title); ok {
+		_, items, err := p.SearchTVDB(ctx, tvdbID, q)
+		return items, err
+	}
+	serial, ok, err := p.findSerial(ctx, q.Title, "")
 	if err != nil || !ok {
 		return nil, err
 	}
-	return p.serialEpisodes(ctx, serial, q, nil)
+	return p.serialEpisodes(ctx, serial, q, nil, provider.SeriesOverride{})
 }
 
-func (p *Provider) findSerial(ctx context.Context, title string) (product, bool, error) {
+// id, if given, picks the serial from the search results.
+func (p *Provider) findSerial(ctx context.Context, title, id string) (product, bool, error) {
 	serials, err := p.search(ctx, "SERIAL", title)
 	if err != nil {
 		return product{}, false, err
 	}
-	serial, ok := p.pick(serials, title)
+	serial, ok := p.pick(serials, title, id)
 	return serial, ok, nil
 }
 
-// TVP can number across seasons, e.g. Ranczo S2 is 14–26. tv is nil for title-only searches.
-func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provider.Query, tv *series) ([]provider.Item, error) {
+// tv and ov are zero for title-only searches, which have no TVDB ID.
+func (p *Provider) serialEpisodes(ctx context.Context, serial product, q provider.Query, tv *series, ov provider.SeriesOverride) ([]provider.Item, error) {
 	seasons, err := p.seasons(ctx, serial.ID)
 	if err != nil {
 		return nil, err
 	}
+	items, covered, all, err := p.overridden(ctx, serial, seasons, q, tv, ov)
+	if err != nil {
+		return nil, err
+	}
+	if _, ruled := ov.Rule(q.Season); ruled || all {
+		return items, nil
+	}
+	found, err := p.automatic(ctx, serial, seasons, q, tv)
+	if err != nil {
+		return nil, err
+	}
+	for _, it := range found {
+		if !covered[it.Episode] && !ov.Pinned(it.ID) {
+			items = append(items, it)
+		}
+	}
+	return items, nil
+}
+
+// Return the episodes the override places; covered holds the TVDB episode
+// numbers it decides, found or not, and all reports whether it decides every
+// requested episode.
+func (p *Provider) overridden(ctx context.Context, serial product, seasons []product, q provider.Query, tv *series, ov provider.SeriesOverride) (items []provider.Item, covered map[int]bool, all bool, err error) {
+	covered = make(map[int]bool)
+	if tv == nil {
+		return nil, covered, false, nil
+	}
+	numbers := []int{q.Episode}
+	if q.Episode == 0 {
+		numbers = nil
+		for _, e := range tv.episodes {
+			if e.season == q.Season {
+				numbers = append(numbers, e.episode)
+			}
+		}
+	}
+	for _, n := range numbers {
+		t, ok := ov.Target(q.Season, n)
+		if !ok {
+			continue
+		}
+		covered[n] = true
+		e, found, err := p.target(ctx, serial.ID, seasons, t, ov)
+		if err != nil {
+			return nil, nil, false, err
+		}
+		if !found {
+			p.log.Debug("TVP has no free episode where an override puts a TVDB episode",
+				"serial", serial.Title, "season", q.Season, "episode", n, "target", t)
+			continue
+		}
+		items = append(items, episodeItem(serial, e, q.Season, n))
+	}
+	return items, covered, len(numbers) > 0 && len(covered) == len(numbers), nil
+}
+
+// Return the free episode at the target, if TVP has exactly one there.
+// Season rules skip episodes pinned to other TVDB episodes.
+func (p *Provider) target(ctx context.Context, serialID int64, seasons []product, t provider.Target, ov provider.SeriesOverride) (product, bool, error) {
+	var match []product
+	for _, s := range seasons {
+		if t.ID == "" && t.Season != 0 && s.Number != t.Season {
+			continue
+		}
+		eps, err := p.episodes(ctx, serialID, s.ID)
+		if err != nil {
+			return product{}, false, err
+		}
+		for _, e := range eps {
+			if t.ID != "" && strconv.FormatInt(e.ID, 10) == t.ID {
+				return e, !e.Payable, nil
+			}
+			if t.ID == "" && e.Number == t.Episode && !ov.Pinned(strconv.FormatInt(e.ID, 10)) {
+				match = append(match, e)
+			}
+		}
+	}
+	if len(match) != 1 || match[0].Payable {
+		return product{}, false, nil
+	}
+	return match[0], true, nil
+}
+
+// TVP can number across seasons, e.g. Ranczo S2 is 14–26. tv is nil for title-only searches.
+func (p *Provider) automatic(ctx context.Context, serial product, seasons []product, q provider.Query, tv *series) ([]provider.Item, error) {
+	var err error
 	bs := blocks(seasons)
 	if len(bs) > 0 && tv != nil {
 		items, numbered, err := p.byNumber(ctx, serial, bs, q, tv)
@@ -333,23 +461,61 @@ func (p *Provider) episodes(ctx context.Context, serialID, seasonID int64) ([]pr
 }
 
 func (p *Provider) searchMovies(ctx context.Context, q provider.Query) ([]provider.Item, error) {
-	vods, err := p.search(ctx, "VOD", q.Title)
-	if err != nil {
-		return nil, err
-	}
-	want := provider.NormalizeTitle(q.Title)
+	want := p.filmWant(q.Title, q.Year)
 	var items []provider.Item
-	for _, v := range vods {
-		if !v.Payable && filmMatches(v, want, q.Year) {
-			items = append(items, movieItem(v, v.Year))
+	seen := make(map[int64]bool)
+	for _, title := range want.titles {
+		vods, err := p.search(ctx, "VOD", title)
+		if err != nil {
+			return nil, err
+		}
+		for _, v := range vods {
+			if !v.Payable && !seen[v.ID] && want.matches(v) {
+				seen[v.ID] = true
+				items = append(items, movieItem(v, v.Year))
+			}
 		}
 	}
 	// Radarr relies on RSS after searching. Watch even found films,
 	// because probing may still reject their streams.
-	if q.Year > 0 && want != "" {
+	if q.Year > 0 && provider.NormalizeTitle(q.Title) != "" {
 		p.watchFilm(q.Title, q.Year)
 	}
 	return items, nil
+}
+
+// filmWant is what a Radarr film matches: the override's product, or its
+// titles or Radarr's, from about the same year.
+type filmWant struct {
+	id         string
+	titles     []string // to search
+	normalized []string
+	year       int
+	overrides  *provider.Overrides
+}
+
+func (p *Provider) filmWant(title string, year int) filmWant {
+	o := p.overrides.Load()
+	ov, _ := o.Film(title, year)
+	w := filmWant{id: ov.ID, titles: []string{title}, year: year, overrides: o}
+	if len(ov.Titles) > 0 {
+		w.titles = ov.Titles
+	}
+	for _, t := range w.titles {
+		if n := provider.NormalizeTitle(t); n != "" {
+			w.normalized = append(w.normalized, n)
+		}
+	}
+	return w
+}
+
+// Products pinned to other films are theirs alone.
+func (w filmWant) matches(v product) bool {
+	id := strconv.FormatInt(v.ID, 10)
+	if w.id != "" {
+		return id == w.id
+	}
+	return !w.overrides.FilmPinned(id) && slices.ContainsFunc(w.normalized, func(n string) bool { return filmMatches(v, n, w.year) })
 }
 
 // Allow a one-year discrepancy in TVP dates; year=0 is unknown.
@@ -373,11 +539,15 @@ func movieItem(v product, year int) provider.Item {
 	}
 }
 
-func (p *Provider) pick(serials []product, title string) (product, bool) {
+// An id overrides title matching.
+func (p *Provider) pick(serials []product, title, id string) (product, bool) {
 	want := provider.NormalizeTitle(title)
 	var matches []product
 	for _, s := range serials {
-		if !s.Payable && titleMatches(s, want) {
+		if s.Payable {
+			continue
+		}
+		if (id != "" && strconv.FormatInt(s.ID, 10) == id) || (id == "" && titleMatches(s, want)) {
 			matches = append(matches, s)
 		}
 	}

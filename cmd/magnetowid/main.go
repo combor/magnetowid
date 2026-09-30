@@ -21,6 +21,7 @@ import (
 
 	"github.com/combor/magnetowid/internal/downloader"
 	"github.com/combor/magnetowid/internal/newznab"
+	"github.com/combor/magnetowid/internal/overrides"
 	"github.com/combor/magnetowid/internal/probe"
 	"github.com/combor/magnetowid/internal/provider"
 	"github.com/combor/magnetowid/internal/provider/bbc"
@@ -99,6 +100,10 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 		tvpProvider,
 		bbcProvider,
 	)
+	overrideStore, err := overrides.Open(db, providers)
+	if err != nil {
+		return err
+	}
 
 	queue, err := downloader.New(dir, db, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)
 	if err != nil {
@@ -108,6 +113,7 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 	prober := &probe.Prober{Client: httpClient}
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Probe: prober, Log: log})
 	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})
+	(&overrides.Handler{Store: overrideStore, APIKey: *apiKey, Log: log}).Register(mux)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "OK\n") })
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
