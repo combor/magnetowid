@@ -1,5 +1,5 @@
 // Package web serves the browser interface: sign-in, live queue and history
-// pages with download controls, and forms for overrides.
+// pages with download controls, forms for overrides, and a setup page.
 //
 // static/htmx-4.0.0.min.js is dist/htmx.min.js from the htmx.org 4.0.0 npm
 // package, under the Zero-Clause BSD license.
@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/combor/magnetowid/internal/downloader"
+	"github.com/combor/magnetowid/internal/newznab"
 	"github.com/combor/magnetowid/internal/overrides"
+	"github.com/combor/magnetowid/internal/provider"
 )
 
 //go:embed templates static
@@ -36,6 +38,7 @@ var (
 	overridesPage = parse(app, "templates/overrides.html")
 	seriesPage    = parse(app, "templates/override.html", "templates/series.html")
 	filmPage      = parse(app, "templates/override.html", "templates/film.html")
+	setupPage     = parse(app, "templates/setup.html")
 )
 
 func parse(base *template.Template, names ...string) *template.Template {
@@ -49,11 +52,13 @@ const (
 
 // Handler serves the interface under /ui/. Signing in takes the API key.
 type Handler struct {
-	Queue     *downloader.Queue
-	Overrides *overrides.Store
-	APIKey    string
-	Version   string
-	Log       *slog.Logger
+	Queue      *downloader.Queue
+	Overrides  *overrides.Store
+	Providers  *provider.Registry
+	Categories []string // the download categories
+	APIKey     string
+	Version    string
+	Log        *slog.Logger
 }
 
 // Register adds the interface's routes to mux, which must not have a
@@ -85,6 +90,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	post("/ui/overrides/{site}/films", h.saveFilm)
 	post("/ui/overrides/{site}/films/{year}/{title}", h.saveFilm)
 	post("/ui/overrides/{site}/films/{year}/{title}/delete", h.deleteFilm)
+	get("/ui/setup", h.setup)
 	mux.Handle("GET /ui/login", secure(http.HandlerFunc(h.loginForm)))
 	mux.Handle("POST /ui/login", secure(csrf.Handler(http.HandlerFunc(h.login))))
 	mux.Handle("POST /ui/logout", secure(csrf.Handler(http.HandlerFunc(h.logout))))
@@ -236,6 +242,11 @@ func (h *Handler) show(w http.ResponseWriter, r *http.Request, status int, page,
 		ov := newOverridesView(h.Overrides, newChrome(jobs, paused, h.Version, page))
 		ov.Notice = notice
 		t, v = overridesPage, ov
+	case "setup":
+		sv := newSetupView(newChrome(jobs, paused, h.Version, page), newznab.BaseURL(r), h.Providers, h.Categories,
+			h.Queue.Dir(), jobs, h.Queue.Outages(), now)
+		sv.Notice = notice
+		t, v = setupPage, sv
 	default:
 		qv := newQueueView(jobs, paused, h.Queue.Outages(), h.Version, now)
 		qv.Notice = notice

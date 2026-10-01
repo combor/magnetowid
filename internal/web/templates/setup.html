@@ -1,0 +1,95 @@
+{{define "page" -}}
+  <section class="card guide" aria-labelledby="connect-title">
+    <header class="guide-head">
+      <h2 id="connect-title">Connect Sonarr and Radarr</h2>
+      <p class="lead">Add magnetowid to each app as a download client, then as an indexer for every site. Both take the API key you sign in with.</p>
+    </header>
+    <div class="fieldset">
+      <div class="fieldset-about">
+        <h3>Download client</h3>
+        <p>Settings → Download Clients → SABnzbd</p>
+      </div>
+      <dl class="values">
+        <dt>Host</dt>
+        <dd><code class="value">{{.Host}}</code></dd>
+        {{- with .Port}}
+        <dt>Port</dt>
+        <dd><code class="value">{{.}}</code></dd>
+        {{- end}}
+        {{- if .SSL}}
+        <dt>Use SSL</dt>
+        <dd>On</dd>
+        {{- end}}
+        <dt>API key</dt>
+        <dd>The key you sign in with</dd>
+        <dt>Category</dt>
+        <dd>{{template "values" .Categories}}{{if not .ByApp}}<p class="for">One for each app.</p>{{end}}</dd>
+      </dl>
+    </div>
+    <div class="fieldset">
+      <div class="fieldset-about">
+        <h3>Indexers</h3>
+        <p>Settings → Indexers → Newznab, one for each site</p>
+      </div>
+      <dl class="values">
+        <dt>URL</dt>
+        <dd>{{template "values" .Indexers}}</dd>
+        <dt>API path</dt>
+        <dd><code class="value">/api</code></dd>
+        <dt>API key</dt>
+        <dd>The same key</dd>
+        <dt>Categories</dt>
+        <dd>{{template "values" .Newznab}}</dd>
+        <dt>Download client</dt>
+        <dd>The one added for magnetowid</dd>
+      </dl>
+    </div>
+    <p class="guide-note">The addresses are the ones this page was opened with. An app that reaches magnetowid another way, such as by a Docker service name, takes that host instead. See <a href="https://github.com/combor/magnetowid/blob/main/docs/usage.md#docker-networking-and-shared-downloads">Docker networking and shared downloads</a>.</p>
+  </section>
+
+  {{- if .Sites}}
+  <section aria-labelledby="sites-title">
+    <div class="section-head">
+      <h2 id="sites-title">Sites</h2>
+      <span class="count">{{len .Sites}}</span>
+    </div>
+    <ul class="rows">
+      {{- range .Sites}}
+      <li class="row" id="site-{{.Name}}">
+        <span class="pos pos-{{.Tone}}" aria-hidden="true">{{if eq .Tone "ok"}}{{template "icon-check"}}{{else if eq .Tone "danger"}}{{template "icon-alert"}}{{else}}–{{end}}</span>
+        <p class="row-title site-name">{{.Name}}</p>
+        <span class="badge badge-{{.Tone}}">{{.Status}}</span>
+        <p class="meta"><span class="facts">{{range .Facts}}<span>{{.}}</span>{{end}}</span></p>
+        {{- with .Error}}
+        {{template "row-error" .}}
+        {{- end}}
+      </li>
+      {{- end}}
+    </ul>
+  </section>
+  {{- end}}
+
+  <section aria-labelledby="server-title">
+    <div class="section-head">
+      <h2 id="server-title">This server</h2>
+    </div>
+    <div class="card server">
+      <dl class="values">
+        {{- with .Version}}
+        <dt>Version</dt>
+        <dd>{{.}}</dd>
+        {{- end}}
+        <dt>Download folder</dt>
+        <dd><code class="value">{{.Dir}}</code><p class="for">Sonarr and Radarr read downloads from here. If they see the folder at another path, add a Remote Path Mapping.</p></dd>
+        {{- with .Offered}}
+        <dt>Categories</dt>
+        <dd>{{.}}</dd>
+        {{- end}}
+      </dl>
+    </div>
+  </section>
+{{- end}}
+
+{{define "values" -}}
+<ul class="alts">{{range .}}<li><code class="value">{{.Text}}</code>{{with .For}}<span class="for">{{.}}</span>{{end}}</li>{{end}}</ul>
+{{- end}}

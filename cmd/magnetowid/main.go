@@ -115,7 +115,8 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Probe: prober, Log: log})
 	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})
 	(&overrides.Handler{Store: overrideStore, APIKey: *apiKey, Log: log}).Register(mux)
-	(&web.Handler{Queue: queue, Overrides: overrideStore, APIKey: *apiKey, Version: version, Log: log}).Register(mux)
+	(&web.Handler{Queue: queue, Overrides: overrideStore, Providers: providers, Categories: cats, APIKey: *apiKey,
+		Version: version, Log: log}).Register(mux)
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) { io.WriteString(w, "OK\n") })
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

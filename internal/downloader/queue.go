@@ -107,6 +107,10 @@ func (j Job) TimeLeft(now time.Time) time.Duration {
 	return time.Duration(float64(now.Sub(j.Started)) * (1 - j.Fraction) / gained)
 }
 
+// Unreachable reports whether the job's last attempt met its provider's
+// outage, which Error then describes.
+func (j Job) Unreachable() bool { return strings.HasPrefix(j.Error, errUnreachable.Error()+": ") }
+
 // HistoryRetention is how long finished jobs are kept.
 const HistoryRetention = 30 * 24 * time.Hour
 
