@@ -1,4 +1,5 @@
-// Package hls selects video and audio from HLS master playlists.
+// Package hls reads HLS playlists: it selects video and audio from master
+// playlists and lists the segments of media playlists.
 package hls
 
 import (
@@ -44,7 +45,7 @@ func Load(ctx context.Context, client *http.Client, s provider.Stream) (m Master
 	}
 	playlist := s.Playlist
 	if playlist == "" {
-		if playlist, base, err = fetch(ctx, client, s); err != nil {
+		if playlist, base, err = fetch(ctx, client, s.URL, s.Header); err != nil {
 			return Master{}, false, fmt.Errorf("fetching playlist: %w", err)
 		}
 	}
@@ -60,13 +61,16 @@ func Load(ctx context.Context, client *http.Client, s provider.Stream) (m Master
 	return Master{Video: video, Audio: audio.uri, AudioLanguage: audio.language}, true, nil
 }
 
+// Hours of short segments with tokenized URIs make media playlists this long.
+const maxPlaylist = 16 << 20
+
 // Return the playlist and its URL after redirects.
-func fetch(ctx context.Context, client *http.Client, s provider.Stream) (string, *url.URL, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, s.URL, nil)
+func fetch(ctx context.Context, client *http.Client, uri string, h http.Header) (string, *url.URL, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
 	if err != nil {
 		return "", nil, err
 	}
-	for k, vs := range s.Header {
+	for k, vs := range h {
 		for _, v := range vs {
 			req.Header.Add(k, v)
 		}
@@ -79,9 +83,12 @@ func fetch(ctx context.Context, client *http.Client, s provider.Stream) (string,
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		return "", nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxPlaylist+1))
 	if err != nil {
 		return "", nil, err
+	}
+	if len(body) > maxPlaylist {
+		return "", nil, fmt.Errorf("over %d bytes", maxPlaylist)
 	}
 	return string(body), resp.Request.URL, nil
 }
