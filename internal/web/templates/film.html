@@ -1,0 +1,41 @@
+{{define "kind"}}film{{end}}
+
+{{define "titles-help"}}The site’s titles for the film, searched instead of Radarr’s.{{end}}
+
+{{define "id-help"}}The site’s film, used even if its title or year differs from Radarr’s. Paste its page’s address or its ID.{{end}}
+
+{{define "form" -}}
+<form class="fields" method="post" action="{{.Action}}" hx-post="{{.Action}}" hx-target="#override-form" hx-swap="innerHTML">
+  {{template "form-start" .}}
+  <div class="fieldset" role="group" aria-labelledby="film-label">
+    <div class="fieldset-about">
+      <h2 id="film-label">Film</h2>
+      <p>Its title and year in Radarr.</p>
+    </div>
+    <div class="fieldset-body">
+      {{- if .New}}
+      <div class="line">
+        <label class="cell cell-wide"><span>Title</span><input class="input" id="name" name="name" value="{{.Film}}" autocomplete="off" spellcheck="false" required
+          {{- if eq .Focus "name"}} autofocus{{end}}{{if index .Errors "title"}} aria-invalid="true" aria-describedby="name-error"{{end}}></label>
+        <label class="cell"><span>Year</span><input class="input" id="year" name="year" type="number" min="1" value="{{.Year}}" required
+          {{- if eq .Focus "year"}} autofocus{{end}}{{if index .Errors "year"}} aria-invalid="true" aria-describedby="year-error"{{end}}></label>
+      </div>
+      {{- with index .Errors "title"}}
+      <p class="field-error" id="name-error">{{template "field-error" .}}{{with $.Exists}} <a href="{{.}}">Edit it</a>{{end}}</p>
+      {{- end}}
+      {{- with index .Errors "year"}}
+      <p class="field-error" id="year-error">{{template "field-error" .}}</p>
+      {{- end}}
+      {{- else}}
+      <p class="fixed">{{.Film}} <span class="episode">{{.Year}}</span></p>
+      {{- end}}
+    </div>
+  </div>
+
+  {{template "titles" .}}
+
+  {{template "site-id" .}}
+
+  {{template "form-actions" .}}
+</form>
+{{- end}}

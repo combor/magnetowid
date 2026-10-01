@@ -14,12 +14,13 @@ import (
 // chrome is the queue summary every page shows.
 type chrome struct {
 	Version  string
-	Page     string // queue or history
+	Page     string // queue, history or overrides
 	Paused   bool
 	Queued   int // unfinished jobs
 	Finished int
 	Notice   string // why an action failed
 	state    string
+	form     bool // an override's form: only its header refreshes
 }
 
 func newChrome(jobs []downloader.Job, paused bool, version, page string) chrome {
@@ -63,20 +64,48 @@ func (c chrome) StateLabel() string {
 	return "Idle"
 }
 
-// Refresh is the URL the page polls.
-func (c chrome) Refresh() string {
-	if c.Page == "history" {
-		return "/ui/history"
+// Heading names a page that shows no heading of its own.
+func (c chrome) Heading() string {
+	switch {
+	case c.form:
+		return ""
+	case c.Page == "history":
+		return "Download history"
+	case c.Page == "overrides":
+		return "Overrides"
 	}
-	return "/ui/queue"
+	return "Download queue"
+}
+
+// Refresh is the URL the page polls, empty if only its header refreshes:
+// refreshing a form would undo what is typed in it.
+func (c chrome) Refresh() string {
+	switch {
+	case c.form:
+		return ""
+	case c.Page == "queue":
+		return "/ui/queue"
+	}
+	return pagePath(c.Page)
 }
 
 // Every is the page's poll interval.
 func (c chrome) Every() string {
-	if c.Page == "history" {
-		return "5s"
+	if c.Page == "queue" {
+		return "1s"
 	}
-	return "1s"
+	return "5s"
+}
+
+// pagePath is where a tab's page is.
+func pagePath(page string) string {
+	switch page {
+	case "history":
+		return "/ui/history"
+	case "overrides":
+		return "/ui/overrides"
+	}
+	return "/ui/"
 }
 
 // queueView is everything the queue page shows, so tests can render any

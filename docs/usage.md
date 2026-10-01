@@ -177,16 +177,22 @@ every five seconds. Downloads stay for 30 days unless Sonarr or Radarr removes
 them first. Removing one can also delete its folder; Sonarr and Radarr cannot
 import a download removed from history.
 
+**Overrides** lists each site's [overrides](#correcting-matches), with forms to
+add, change and remove them for series and films. A form that can't be saved
+says why beside the field at fault.
+
 Signing in lasts 30 days. Changing `MAGNETOWID_API_KEY` signs every browser
 out. Search for titles in Sonarr/Radarr.
 
 ## Correcting matches
 
 If magnetowid misses a series or film, or pairs the wrong episodes, add an
-override. The overrides API takes the same API key, in an `X-Api-Key` header
-or an `apikey` parameter. Changes apply to the next search, and RSS feeds
-rebuild with them at the next sync. Overrides are saved in
-`.magnetowid-jobs.db`.
+override on the [web interface](#web-interface)'s **Overrides** page or through
+the overrides API. Changes apply to the next search, and RSS feeds rebuild with
+them at the next sync. Overrides are saved in `.magnetowid-jobs.db`.
+
+The API takes the same API key, in an `X-Api-Key` header or an `apikey`
+parameter.
 
 | Request | Purpose |
 |---|---|
@@ -207,6 +213,9 @@ A series override has one or more of:
 | `id` | The site's series, among the search results for the titles, if several share a title. |
 | `seasons` | Rules placing TVDB seasons in the site's numbering: TVDB's episode *n* is the site's episode *n* + `offset` in season `site_season`. `site_season` 0 accepts any season, if only one has that number. |
 | `episodes` | Single TVDB episodes, such as `S01E05` or the special `S00E01`, each with the site's episode ID. These win over `seasons`, and no other episode matches a pinned one. |
+
+The Overrides page calls these *Titles to search*, *ID or page address*,
+*Season rules* and *Pinned episodes*.
 
 A film override has `titles` to search instead of Radarr's, an `id`, or both.
 The site's film with that `id`, found by searching the titles, is used even

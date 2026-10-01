@@ -1,4 +1,4 @@
-{{/* Shared by the queue and history pages. */}}
+{{/* Shared by the pages behind sign-in. */}}
 
 {{/* Refreshes keep a failed removal's notice while its confirmation is open. */}}
 {{define "head"}}
@@ -7,7 +7,7 @@
 {{- end}}
 
 {{define "content" -}}
-<div id="app" hx-get="{{.Refresh}}" hx-trigger="every {{.Every}}" hx-swap="innerMorph">
+<div id="app"{{with .Refresh}} hx-get="{{.}}" hx-trigger="every {{$.Every}}" hx-swap="innerMorph"{{end}}>
 {{template "app" .}}
 </div>
 <div class="notice" id="notice" aria-live="assertive">{{with .Notice}}{{template "notice" .}}{{end}}</div>
@@ -22,7 +22,27 @@
 {{- end}}
 
 {{define "app" -}}
-<header class="topbar" data-state="{{.State}}">
+{{template "topbar" .}}
+
+{{/* Actions queue with refreshes so responses land in order. Nothing is cancelled: the bundled htmx releases the queue
+     when a cancelled request ends, while its replacement still runs. */}}
+<main class="container" hx-target:inherited="#app" hx-swap:inherited="innerMorph" hx-sync:inherited="#app:queue all">
+  {{with .Heading}}<h1 class="visually-hidden">{{.}}</h1>{{end}}
+  <div class="toolbar">
+    <nav class="tabs" aria-label="Pages">
+      <a class="tab" href="/ui/"{{if eq .Page "queue"}} aria-current="page"{{end}}>Queue{{if .Queued}}<span class="tab-count">{{.Queued}}</span>{{end}}</a>
+      <a class="tab" href="/ui/history"{{if eq .Page "history"}} aria-current="page"{{end}}>History{{if .Finished}}<span class="tab-count">{{.Finished}}</span>{{end}}</a>
+      <a class="tab" href="/ui/overrides"{{if eq .Page "overrides"}} aria-current="page"{{end}}>Overrides</a>
+    </nav>
+    {{- block "actions" .}}{{end}}
+  </div>
+  {{template "page" .}}
+</main>
+{{- end}}
+
+{{/* A page that doesn't refresh whole refreshes its header. */}}
+{{define "topbar" -}}
+<header class="topbar" data-state="{{.State}}"{{if not .Refresh}} hx-get="/ui/topbar" hx-trigger="every {{.Every}}" hx-target="this" hx-swap="outerMorph"{{end}}>
   <div class="topbar-inner">
     <a class="brand" href="/ui/">
       <span class="mark">{{template "mark"}}</span>
@@ -43,20 +63,6 @@
     </div>
   </div>
 </header>
-
-{{/* Actions queue with refreshes so responses land in order. Nothing is cancelled: the bundled htmx releases the queue
-     when a cancelled request ends, while its replacement still runs. */}}
-<main class="container" hx-target:inherited="#app" hx-swap:inherited="innerMorph" hx-sync:inherited="#app:queue all">
-  <h1 class="visually-hidden">{{if eq .Page "history"}}Download history{{else}}Download queue{{end}}</h1>
-  <div class="toolbar">
-    <nav class="tabs" aria-label="Pages">
-      <a class="tab" href="/ui/"{{if eq .Page "queue"}} aria-current="page"{{end}}>Queue{{if .Queued}}<span class="tab-count">{{.Queued}}</span>{{end}}</a>
-      <a class="tab" href="/ui/history"{{if eq .Page "history"}} aria-current="page"{{end}}>History{{if .Finished}}<span class="tab-count">{{.Finished}}</span>{{end}}</a>
-    </nav>
-    {{- block "actions" .}}{{end}}
-  </div>
-  {{template "page" .}}
-</main>
 {{- end}}
 
 {{define "name" -}}
@@ -88,4 +94,9 @@
 {{define "icon-play"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M6.5 4.3c0-.8.9-1.3 1.6-.9l8.2 5c.6.4.6 1.3 0 1.7l-8.2 5c-.7.4-1.6-.1-1.6-.9V4.3Z"/></svg>{{end}}
 {{define "icon-trash"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M3.5 5.5h13M8 5.5V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v1.5M5 5.5l.7 10a1.6 1.6 0 0 0 1.6 1.5h5.4a1.6 1.6 0 0 0 1.6-1.5l.7-10M8.5 8.5v5.5M11.5 8.5v5.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
 {{define "icon-check"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m5 10.5 3.2 3.2L15 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
+{{define "icon-plus"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 4.5v11M4.5 10h11" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>{{end}}
+{{define "icon-x"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m5.5 5.5 9 9M14.5 5.5l-9 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>{{end}}
+{{define "icon-edit"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="m12.4 4.6 3 3M4 16l.7-3.4 8.6-8.6a1.5 1.5 0 0 1 2.1 0l.6.6a1.5 1.5 0 0 1 0 2.1L7.4 15.3 4 16Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>{{end}}
+{{define "icon-tv"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="2.8" y="4" width="14.4" height="9.5" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M7 16.5h6" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>{{end}}
+{{define "icon-film"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><rect x="3" y="3.5" width="14" height="13" rx="2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M6.5 3.5v13M13.5 3.5v13M3 7.8h3.5M3 12.2h3.5M13.5 7.8H17M13.5 12.2H17" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>{{end}}
 {{define "icon-alert"}}<svg class="icon" viewBox="0 0 20 20" aria-hidden="true" focusable="false"><path d="M10 2a8 8 0 1 1 0 16 8 8 0 0 1 0-16Zm0 11.5a1.1 1.1 0 1 0 0 2.2 1.1 1.1 0 0 0 0-2.2ZM10 5a1 1 0 0 0-1 1v5a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Z"/></svg>{{end}}

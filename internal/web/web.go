@@ -1,5 +1,5 @@
-// Package web serves the browser interface: sign-in, and live queue and
-// history pages with download controls.
+// Package web serves the browser interface: sign-in, live queue and history
+// pages with download controls, and forms for overrides.
 //
 // static/htmx-4.0.0.min.js is dist/htmx.min.js from the htmx.org 4.0.0 npm
 // package, under the Zero-Clause BSD license.
@@ -21,21 +21,25 @@ import (
 	"time"
 
 	"github.com/combor/magnetowid/internal/downloader"
+	"github.com/combor/magnetowid/internal/overrides"
 )
 
 //go:embed templates static
 var files embed.FS
 
 var (
-	layout      = template.Must(template.ParseFS(files, "templates/layout.html"))
-	app         = parse(layout, "templates/app.html")
-	loginPage   = parse(layout, "templates/login.html")
-	queuePage   = parse(app, "templates/queue.html")
-	historyPage = parse(app, "templates/history.html")
+	layout        = template.Must(template.ParseFS(files, "templates/layout.html"))
+	app           = parse(layout, "templates/app.html")
+	loginPage     = parse(layout, "templates/login.html")
+	queuePage     = parse(app, "templates/queue.html")
+	historyPage   = parse(app, "templates/history.html")
+	overridesPage = parse(app, "templates/overrides.html")
+	seriesPage    = parse(app, "templates/override.html", "templates/series.html")
+	filmPage      = parse(app, "templates/override.html", "templates/film.html")
 )
 
-func parse(base *template.Template, name string) *template.Template {
-	return template.Must(template.Must(base.Clone()).ParseFS(files, name))
+func parse(base *template.Template, names ...string) *template.Template {
+	return template.Must(template.Must(base.Clone()).ParseFS(files, names...))
 }
 
 const (
@@ -45,10 +49,11 @@ const (
 
 // Handler serves the interface under /ui/. Signing in takes the API key.
 type Handler struct {
-	Queue   *downloader.Queue
-	APIKey  string
-	Version string
-	Log     *slog.Logger
+	Queue     *downloader.Queue
+	Overrides *overrides.Store
+	APIKey    string
+	Version   string
+	Log       *slog.Logger
 }
 
 // Register adds the interface's routes to mux, which must not have a
@@ -67,6 +72,19 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	post("/ui/queue/{id}/resume", h.pauseJob(false))
 	post("/ui/queue/{id}/delete", h.cancelJob)
 	post("/ui/history/{id}/delete", h.deleteJob)
+	get("/ui/topbar", h.topbar)
+	get("/ui/overrides", h.listOverrides)
+	get("/ui/overrides/{site}/series/new", h.seriesForm)
+	get("/ui/overrides/{site}/series/{tvdbid}", h.seriesForm)
+	post("/ui/overrides/{site}/series", h.saveSeries)
+	post("/ui/overrides/{site}/series/{tvdbid}", h.saveSeries)
+	post("/ui/overrides/{site}/series/{tvdbid}/delete", h.deleteSeries)
+	get("/ui/overrides/{site}/films/new", h.filmForm)
+	// Slashes in titles are escaped: Face%2FOff.
+	get("/ui/overrides/{site}/films/{year}/{title}", h.filmForm)
+	post("/ui/overrides/{site}/films", h.saveFilm)
+	post("/ui/overrides/{site}/films/{year}/{title}", h.saveFilm)
+	post("/ui/overrides/{site}/films/{year}/{title}/delete", h.deleteFilm)
 	mux.Handle("GET /ui/login", secure(http.HandlerFunc(h.loginForm)))
 	mux.Handle("POST /ui/login", secure(csrf.Handler(http.HandlerFunc(h.login))))
 	mux.Handle("POST /ui/logout", secure(csrf.Handler(http.HandlerFunc(h.logout))))
@@ -209,11 +227,16 @@ func (h *Handler) show(w http.ResponseWriter, r *http.Request, status int, page,
 	jobs, paused, now := h.Queue.Jobs(), h.Queue.Paused(), time.Now()
 	var t *template.Template
 	var v any
-	if page == "history" {
+	switch page {
+	case "history":
 		hv := newHistoryView(jobs, paused, h.Version, now)
 		hv.Notice = notice
 		t, v = historyPage, hv
-	} else {
+	case "overrides":
+		ov := newOverridesView(h.Overrides, newChrome(jobs, paused, h.Version, page))
+		ov.Notice = notice
+		t, v = overridesPage, ov
+	default:
 		qv := newQueueView(jobs, paused, h.Queue.Outages(), h.Version, now)
 		qv.Notice = notice
 		t, v = queuePage, qv
@@ -282,11 +305,7 @@ func (h *Handler) done(w http.ResponseWriter, r *http.Request, page, what, notic
 		h.show(w, r, http.StatusOK, page, "")
 		return
 	}
-	path := "/ui/"
-	if page == "history" {
-		path = "/ui/history"
-	}
-	http.Redirect(w, r, path, http.StatusSeeOther)
+	http.Redirect(w, r, pagePath(page), http.StatusSeeOther)
 }
 
 // Render fully before writing so a template error cannot send half a page.

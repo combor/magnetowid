@@ -1,0 +1,94 @@
+{{define "kind"}}series{{end}}
+
+{{define "titles-help"}}The site’s titles for the series, searched instead of the ones magnetowid finds.{{end}}
+
+{{define "id-help"}}The site’s series, if several share a title. Paste its page’s address or its ID.{{end}}
+
+{{define "form" -}}
+<form class="fields" method="post" action="{{.Action}}" hx-post="{{.Action}}" hx-target="#override-form" hx-swap="innerHTML">
+  {{template "form-start" .}}
+  <div class="fieldset">
+    <div class="fieldset-about">
+      <h2>{{if .New}}<label for="tvdbid">TVDB ID</label>{{else}}TVDB ID{{end}}</h2>
+      <p>The number in the series’ TVDB link in Sonarr.</p>
+    </div>
+    <div class="fieldset-body">
+      {{- if .New}}
+      <input class="input input-id" id="tvdbid" name="tvdbid" value="{{.TVDBID}}" inputmode="numeric" pattern="\s*[0-9]+\s*" title="A number, such as 81970" autocomplete="off" required
+        {{- if eq .Focus "tvdbid"}} autofocus{{end}}{{if index .Errors "tvdbid"}} aria-invalid="true" aria-describedby="tvdbid-error"{{end}}>
+      {{- with index .Errors "tvdbid"}}
+      <p class="field-error" id="tvdbid-error">{{template "field-error" .}}{{with $.Exists}} <a href="{{.}}">Edit it</a>{{end}}</p>
+      {{- end}}
+      {{- else}}
+      <p class="fixed">{{.TVDBID}}</p>
+      {{- end}}
+    </div>
+  </div>
+
+  {{template "titles" .}}
+
+  {{template "site-id" .}}
+
+  <div class="fieldset" role="group" aria-labelledby="seasons-label">
+    <div class="fieldset-about">
+      <h2 id="seasons-label">Season rules</h2>
+      <p>Where a TVDB season’s episodes are on the site: TVDB’s episode <i>n</i> is the site’s episode <i>n</i> plus the shift. Site season 0 accepts any season, if only one has that episode.</p>
+    </div>
+    <div class="fieldset-body">
+      <ol class="lines">
+        {{- range $row := .Seasons}}
+        <li class="line">
+          <label class="cell"><span>TVDB season</span><input class="input" id="season-{{.N}}" name="season" type="number" min="1" value="{{.Season}}"
+            {{- if .Focus}} autofocus{{end}}{{if .Error}} aria-invalid="true" aria-describedby="season-{{.N}}-error"{{end}}></label>
+          <span class="to" aria-hidden="true">→</span>
+          <label class="cell"><span>Site season</span><input class="input" name="site_season" type="number" min="0" value="{{.SiteSeason}}"{{if .Error}} aria-invalid="true"{{end}}></label>
+          <label class="cell"><span>Episode shift</span><input class="input" name="offset" type="number" value="{{.Offset}}" placeholder="0"{{if .Error}} aria-invalid="true"{{end}}></label>
+          {{- if gt (len $.Seasons) 1}}
+          <button class="icon-btn" type="submit" name="remove" value="seasons.{{.N}}" formnovalidate aria-label="Remove season rule {{.N}}" title="Remove">{{template "icon-x"}}</button>
+          {{- end}}
+          {{- with .Error}}
+          <p class="field-error" id="season-{{$row.N}}-error">{{template "field-error" .}}</p>
+          {{- end}}
+        </li>
+        {{- end}}
+      </ol>
+      {{- with index .Errors "seasons"}}
+      <p class="field-error" id="seasons-error">{{template "field-error" .}}</p>
+      {{- end}}
+      <button class="btn btn-small btn-quiet" id="add-seasons" type="submit" name="add" value="seasons" formnovalidate{{if eq .Focus "add-seasons"}} autofocus{{end}}>{{template "icon-plus"}}<span>Add a season rule</span></button>
+    </div>
+  </div>
+
+  <div class="fieldset" role="group" aria-labelledby="episodes-label">
+    <div class="fieldset-about">
+      <h2 id="episodes-label">Pinned episodes</h2>
+      <p>Single TVDB episodes, each with the site’s episode. Pins win over season rules, and season 0 holds specials.</p>
+    </div>
+    <div class="fieldset-body">
+      <ol class="lines">
+        {{- range $row := .Episodes}}
+        <li class="line">
+          <label class="cell"><span>Season</span><input class="input" id="ep-{{.N}}" name="ep_season" type="number" min="0" value="{{.Season}}"
+            {{- if .Focus}} autofocus{{end}}{{if .Error}} aria-invalid="true" aria-describedby="ep-{{.N}}-error"{{end}}></label>
+          <label class="cell"><span>Episode</span><input class="input" name="ep_episode" type="number" min="1" value="{{.Episode}}"{{if .Error}} aria-invalid="true"{{end}}></label>
+          <span class="to" aria-hidden="true">→</span>
+          <label class="cell cell-wide"><span>ID or page address</span><input class="input" name="ep_id" value="{{.ID}}" autocomplete="off" spellcheck="false"{{if .Error}} aria-invalid="true"{{end}}></label>
+          {{- if gt (len $.Episodes) 1}}
+          <button class="icon-btn" type="submit" name="remove" value="episodes.{{.N}}" formnovalidate aria-label="Remove pinned episode {{.N}}" title="Remove">{{template "icon-x"}}</button>
+          {{- end}}
+          {{- with .Error}}
+          <p class="field-error" id="ep-{{$row.N}}-error">{{template "field-error" .}}</p>
+          {{- end}}
+        </li>
+        {{- end}}
+      </ol>
+      {{- with index .Errors "episodes"}}
+      <p class="field-error" id="episodes-error">{{template "field-error" .}}</p>
+      {{- end}}
+      <button class="btn btn-small btn-quiet" id="add-episodes" type="submit" name="add" value="episodes" formnovalidate{{if eq .Focus "add-episodes"}} autofocus{{end}}>{{template "icon-plus"}}<span>Pin an episode</span></button>
+    </div>
+  </div>
+
+  {{template "form-actions" .}}
+</form>
+{{- end}}
