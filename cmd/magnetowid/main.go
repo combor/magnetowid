@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -45,16 +46,21 @@ func main() {
 
 func run(log *slog.Logger, level *slog.LevelVar) error {
 	listen := flag.String("listen", envOr("MAGNETOWID_LISTEN", ":8484"), "listen address")
-	apiKey := flag.String("api-key", os.Getenv("MAGNETOWID_API_KEY"), "API key for both APIs (required)")
+	// Usage prints flag defaults, so settings that hold secrets, the API key and
+	// a proxy URL's password, get theirs from the environment after parsing.
+	apiKey := flag.String("api-key", "", "API key for both APIs (required)")
 	downloadDir := flag.String("download-dir", os.Getenv("MAGNETOWID_DOWNLOAD_DIR"), "where finished downloads go (required)")
 	categories := flag.String("categories", envOr("MAGNETOWID_CATEGORIES", "tv,movies"), "comma-separated download categories")
 	ffmpeg := flag.String("ffmpeg", envOr("MAGNETOWID_FFMPEG", "ffmpeg"), "ffmpeg binary")
 	logLevel := flag.String("log-level", envOr("MAGNETOWID_LOG_LEVEL", "info"), "log level: debug, info, warn or error")
 	const proxyUsage = `'s HTTP proxy, e.g. http://127.0.0.1:8888, or "direct" for none (default: the environment's)`
-	tvpProxy := flag.String("tvp-proxy", os.Getenv("MAGNETOWID_TVP_PROXY"), "TVP VOD"+proxyUsage)
-	bbcProxy := flag.String("bbc-proxy", os.Getenv("MAGNETOWID_BBC_PROXY"), "BBC iPlayer"+proxyUsage)
+	tvpProxy := flag.String("tvp-proxy", "", "TVP VOD"+proxyUsage)
+	bbcProxy := flag.String("bbc-proxy", "", "BBC iPlayer"+proxyUsage)
 	healthcheck := flag.Bool("healthcheck", false, "ask the magnetowid at the listen address whether it is healthy, and exit")
 	flag.Parse()
+	*apiKey = cmp.Or(*apiKey, os.Getenv("MAGNETOWID_API_KEY"))
+	*tvpProxy = cmp.Or(*tvpProxy, os.Getenv("MAGNETOWID_TVP_PROXY"))
+	*bbcProxy = cmp.Or(*bbcProxy, os.Getenv("MAGNETOWID_BBC_PROXY"))
 
 	if *healthcheck {
 		return checkHealth(*listen)
