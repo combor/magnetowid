@@ -159,8 +159,8 @@ curl 'http://localhost:8484/api?mode=queue&name=resume&value=JOB_ID&apikey=YOUR_
 ```
 
 `mode=queue&apikey=YOUR_API_KEY` lists job IDs (`nzo_id`). Use `name=pause`
-and comma-separated IDs in `value` to pause jobs. Pauses survive restarts;
-interrupted downloads restart from the beginning when resumed.
+and comma-separated IDs in `value` to pause jobs. Pauses survive restarts, and
+resumed downloads continue where they stopped.
 
 ## Web interface
 
@@ -168,9 +168,9 @@ Open `http://<host>:8484/` in a browser and sign in with the API key.
 
 **Queue** shows the running download's progress and time left, queued jobs in
 run order, and paused or retrying jobs with their last error. It refreshes
-every second. Pause or resume the queue or a job, or remove a job; removing the
-running download deletes its partial file. Resumed downloads restart from the
-beginning.
+every second. Pause or resume the queue or a job, or remove a job; removing an
+unfinished download deletes its partial files. Resumed downloads continue where
+they stopped.
 
 **History** lists finished and failed downloads, newest first, and refreshes
 every five seconds. Downloads stay for 30 days unless Sonarr or Radarr removes
@@ -301,9 +301,15 @@ Include the steps to reproduce and any relevant error message, with API keys rem
   known audio language. Probes run during search and are cached for a day.
   Downloads keep one audio track; subtitle conversion supports TTML only.
 - **Restarts:** `.magnetowid-jobs.db` stores the queue, history, and watch lists.
-  Completed history expires after 30 days. Interrupted downloads restart from
-  the beginning. The download filesystem must support file locks; only one
-  magnetowid instance can use it at a time.
+  Completed history expires after 30 days. The download filesystem must support
+  file locks; only one magnetowid instance can use it at a time.
+- **Partial downloads:** magnetowid fetches HLS segments, four at a time, into
+  `.incomplete/<job id>` in the download folder, then remuxes them with ffmpeg.
+  Paused, interrupted and retried downloads continue from their last complete
+  segment, unless the site now serves a different stream. Other streams, such
+  as live or encrypted HLS, go straight to ffmpeg and start over. Partial files
+  stay until the job finishes or is removed, and finishing needs free space for
+  about twice the video's size.
 
 ## Adding a site
 

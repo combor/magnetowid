@@ -5,7 +5,7 @@
 </form>
 {{- else -}}
 <form method="post" action="/ui/queue/pause" hx-post="/ui/queue/pause">
-  <button class="btn btn-small btn-quiet" type="submit" title="Running downloads restart from the beginning when resumed">{{template "icon-pause"}}<span>Pause<span class="wide"> queue</span></span></button>
+  <button class="btn btn-small btn-quiet" type="submit">{{template "icon-pause"}}<span>Pause<span class="wide"> queue</span></span></button>
 </form>
 {{- end}}
 {{- end}}
@@ -82,14 +82,14 @@
   </form>
   {{- else}}
   <form method="post" action="/ui/queue/{{.ID}}/pause" hx-post="/ui/queue/{{.ID}}/pause">
-    <button class="icon-btn" type="submit" aria-label="Pause {{.Label}}" title="{{if .Running}}Pause: the download restarts from the beginning when resumed{{else}}Pause{{end}}">{{template "icon-pause"}}</button>
+    <button class="icon-btn" type="submit" aria-label="Pause {{.Label}}" title="Pause">{{template "icon-pause"}}</button>
   </form>
   {{- end}}
   {{template "remove-button" .}}
   <div class="confirm" id="remove-{{.ID}}" popover role="dialog" aria-labelledby="remove-{{.ID}}-title">
     <h2 class="confirm-title" id="remove-{{.ID}}-title">{{if .Running}}Stop and remove this download?{{else}}Remove it from the queue?{{end}}</h2>
     <p class="confirm-name">{{.Label}}</p>
-    <p class="confirm-text">{{if .Running}}Its partial download is deleted.{{else}}It won’t be downloaded.{{end}}</p>
+    <p class="confirm-text">{{if or .Running .Percent}}Its partial download is deleted.{{else}}It won’t be downloaded.{{end}}</p>
     {{template "remove-notice" .}}
     <form class="confirm-actions" method="post" action="/ui/queue/{{.ID}}/delete" hx-post="/ui/queue/{{.ID}}/delete">
       {{template "keep-button" .}}

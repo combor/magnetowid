@@ -106,7 +106,7 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 		return err
 	}
 
-	queue, err := downloader.New(dir, db, providers, &downloader.FFmpeg{Path: *ffmpeg}, log)
+	queue, err := downloader.New(dir, db, providers, &downloader.FFmpeg{Path: *ffmpeg, Log: log}, log)
 	if err != nil {
 		return err
 	}

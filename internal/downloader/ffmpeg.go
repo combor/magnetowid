@@ -4,10 +4,15 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/cookiejar"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,28 +26,22 @@ import (
 
 var defaultClient = &http.Client{Timeout: 30 * time.Second}
 
-// FFmpeg remuxes streams into MP4 without transcoding.
+const playlistTimeout = 30 * time.Second
+
+// FFmpeg downloads HLS segments itself, keeping them across attempts, and
+// remuxes them into MP4 with ffmpeg. Other streams go straight to ffmpeg.
+// Neither transcodes.
 type FFmpeg struct {
-	Path   string       // binary; "ffmpeg" if empty
-	Client *http.Client // for HLS master playlists; defaultClient if nil
+	Path string // binary; "ffmpeg" if empty
+	// Fetches playlists and segments; nil uses a default. Each download gets
+	// its own copy, with a cookie jar if the client has none.
+	Client *http.Client
+	Log    *slog.Logger // nil discards
 	// Zero defaults to 5 minutes, allowing for +faststart's silent final pass.
 	StallTimeout time.Duration
-}
 
-// Select HLS inputs before invoking ffmpeg, which otherwise probes every variant.
-func pickInputs(ctx context.Context, client *http.Client, s provider.Stream) ([]string, string, error) {
-	m, ok, err := hls.Load(ctx, client, s)
-	if err != nil {
-		return nil, "", err
-	}
-	if !ok {
-		return []string{s.URL}, "", nil
-	}
-	inputs := []string{m.Video.URI}
-	if m.Audio != "" {
-		inputs = append(inputs, m.Audio)
-	}
-	return inputs, m.AudioLanguage, nil
+	segmentTimeout time.Duration               // zero defaults to a minute
+	retryDelay     func(try int) time.Duration // nil doubles from a second
 }
 
 // ffmpeg logs these when it drops data but still exits 0.
@@ -56,32 +55,90 @@ var dataLossMessages = []string{
 	"corrupt input packet in",
 }
 
-func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string, progress func(time.Duration, int64)) error {
-	bin := f.Path
-	if bin == "" {
-		bin = "ffmpeg"
+var (
+	errDataLoss   = errors.New("incomplete download")
+	errUnreadable = errors.New("unreadable input")
+)
+
+// ffmpeg logs these for inputs it can't read at all; 5.x only the second.
+var unreadableMessages = []string{
+	"Error opening input",
+	"Invalid data found when processing input",
+}
+
+// Segment requests share connections, one per worker.
+var segmentTransport = func() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = segmentWorkers
+	return t
+}()
+
+// Download keeps segments in out's folder until a download succeeds or the
+// stream changes.
+func (f *FFmpeg) Download(ctx context.Context, s provider.Stream, out string, progress func(time.Duration, int64)) error {
+	client := &http.Client{Transport: segmentTransport}
+	if f.Client != nil {
+		c := *f.Client
+		client = &c
 	}
-	client := f.Client
-	if client == nil {
-		client = defaultClient
+	if client.Jar == nil {
+		// ffmpeg sends a playlist's cookies with its segments too.
+		client.Jar, _ = cookiejar.New(nil)
 	}
-	stall := f.StallTimeout
-	if stall == 0 {
-		stall = 5 * time.Minute
+	// Fail before fetching a stream that can't be remuxed.
+	if _, err := f.binary(); err != nil {
+		return err
 	}
-	inputs, audioLanguage, err := pickInputs(parent, client, s)
+	// Select HLS inputs before invoking ffmpeg, which otherwise probes every variant.
+	loadCtx, cancel := context.WithTimeout(ctx, playlistTimeout)
+	m, master, err := hls.Load(loadCtx, client, s)
+	cancel()
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithCancelCause(parent)
-	defer cancel(nil)
-
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "warning", "-y"}
+	dir := filepath.Join(filepath.Dir(out), segmentsDir)
+	if master {
+		err := f.downloadSegments(ctx, client, s.Header, m, dir, out, progress)
+		if !errors.Is(err, hls.ErrUnsupported) {
+			return err
+		}
+		f.log().Info("can't fetch the stream's segments; ffmpeg downloads it from the start",
+			"file", filepath.Base(out), "err", err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	inputs := directInputs(s, m, master)
+	var args []string
 	for _, in := range inputs {
 		args = append(args, headerArgs(s.Header)...)
 		args = append(args, "-i", in)
 	}
-	if len(inputs) == 2 {
+	return f.run(ctx, "", append(args, outputArgs(len(inputs), m.AudioLanguage, out)...), progress)
+}
+
+func (f *FFmpeg) log() *slog.Logger {
+	if f.Log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return f.Log
+}
+
+func directInputs(s provider.Stream, m hls.Master, master bool) []string {
+	if !master {
+		return []string{s.URL}
+	}
+	if m.Audio != "" {
+		return []string{m.Video.URI, m.Audio}
+	}
+	return []string{m.Video.URI}
+}
+
+// outputArgs follow inputs, whose first video and, if there are two, second's
+// audio go into out.
+func outputArgs(inputs int, audioLanguage, out string) []string {
+	var args []string
+	if inputs == 2 {
 		args = append(args, "-map", "0:v:0", "-map", "1:a:0")
 	}
 	// Opening rendition URLs bypasses the master's language tag. MP4 needs a
@@ -92,14 +149,48 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 			args = append(args, "-metadata:s:a:0", "language="+code)
 		}
 	}
-	args = append(args,
+	return append(args,
 		"-sn", "-dn", // not all subtitle/data streams fit in MP4
 		"-c", "copy",
 		"-movflags", "+faststart",
 		"-progress", "pipe:1", "-nostats",
 		out,
 	)
+}
+
+// binary returns ffmpeg's absolute path: a relative one would resolve against
+// the folder ffmpeg runs in.
+func (f *FFmpeg) binary() (string, error) {
+	bin := f.Path
+	if bin == "" {
+		bin = "ffmpeg"
+	}
+	bin, err := exec.LookPath(bin)
+	if err == nil {
+		bin, err = filepath.Abs(bin)
+	}
+	if err != nil {
+		return "", fmt.Errorf("ffmpeg: %w", err)
+	}
+	return bin, nil
+}
+
+// run runs ffmpeg in dir, or the current folder if dir is empty.
+func (f *FFmpeg) run(parent context.Context, dir string, args []string, progress func(time.Duration, int64)) error {
+	bin, err := f.binary()
+	if err != nil {
+		return err
+	}
+	stall := f.StallTimeout
+	if stall == 0 {
+		stall = 5 * time.Minute
+	}
+	ctx, cancel := context.WithCancelCause(parent)
+	defer cancel(nil)
+
+	args = append([]string{"-nostdin", "-hide_banner", "-loglevel", "warning", "-y"}, args...)
 	cmd := exec.CommandContext(ctx, bin, args...)
+	cmd.Dir = dir
 	cmd.WaitDelay = 5 * time.Second
 	// Isolate ffmpeg from terminal signals so magnetowid can requeue interrupted jobs.
 	cmd.SysProcAttr = ownProcessGroup()
@@ -116,6 +207,7 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 	}
 
 	tail := &tailBuffer{max: 4096}
+	var unreadable atomic.Bool
 	stderrDone := make(chan struct{})
 	go func() {
 		defer close(stderrDone)
@@ -123,9 +215,14 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 		for sc.Scan() {
 			line := sc.Text()
 			tail.Write([]byte(line + "\n"))
+			for _, m := range unreadableMessages {
+				if strings.Contains(line, m) {
+					unreadable.Store(true)
+				}
+			}
 			for _, m := range dataLossMessages {
 				if strings.Contains(line, m) {
-					cancel(fmt.Errorf("incomplete download: %s", strings.TrimSpace(line)))
+					cancel(fmt.Errorf("%w: %s", errDataLoss, strings.TrimSpace(line)))
 				}
 			}
 		}
@@ -173,6 +270,9 @@ func (f *FFmpeg) Download(parent context.Context, s provider.Stream, out string,
 		return fmt.Errorf("ffmpeg: %w", cause)
 	}
 	if waitErr != nil {
+		if unreadable.Load() {
+			waitErr = fmt.Errorf("%w: %w", errUnreadable, waitErr)
+		}
 		return fmt.Errorf("ffmpeg: %w: %s", waitErr, strings.TrimSpace(tail.String()))
 	}
 	return nil

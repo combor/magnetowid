@@ -188,9 +188,7 @@ func TestJobCompletes(t *testing.T) {
 	if j.Fraction != 1 || j.Bytes != 7 {
 		t.Errorf("fraction = %v, bytes = %d", j.Fraction, j.Bytes)
 	}
-	if _, err := os.Stat(filepath.Join(q.Dir(), ".incomplete", id)); !os.IsNotExist(err) {
-		t.Errorf("work dir not removed: %v", err)
-	}
+	waitGone(t, q.workDir(id))
 }
 
 func TestSameNameGetsSuffix(t *testing.T) {
@@ -597,18 +595,212 @@ func TestCrashedJobIsQueued(t *testing.T) {
 	}
 }
 
-func TestNewRemovesLeftoverWork(t *testing.T) {
+func TestNewKeepsOnlyUnfinishedWork(t *testing.T) {
 	dir := t.TempDir()
-	stale := filepath.Join(dir, incompleteDir, "SABnzbd_nzo_x", "x.mp4")
-	if err := os.MkdirAll(filepath.Dir(stale), 0o777); err != nil {
+	q := newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
+	queued := add(t, q, "queued", "tv", 0, nzb.Ref{Provider: "fake", ID: "queued"})
+	done := add(t, q, "done", "tv", 0, nzb.Ref{Provider: "fake", ID: "done"})
+	q.mu.Lock()
+	q.jobs[done].Status = StatusCompleted
+	q.put(q.jobs[done])
+	q.mu.Unlock()
+	q.db.Close()
+	for _, id := range []string{queued, done, "SABnzbd_nzo_gone"} {
+		if err := os.MkdirAll(filepath.Join(dir, incompleteDir, id), 0o777); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(dir, incompleteDir, "stray"), nil, 0o666); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(stale, []byte("partial"), 0o666); err != nil {
-		t.Fatal(err)
-	}
+
 	newQueue(t, dir, &fakeProvider{}, &fakeEngine{})
-	if _, err := os.Stat(filepath.Join(dir, incompleteDir)); !os.IsNotExist(err) {
-		t.Errorf("leftover work not removed: %v", err)
+	entries, err := os.ReadDir(filepath.Join(dir, incompleteDir))
+	if err != nil || len(entries) != 1 || entries[0].Name() != queued {
+		t.Errorf("kept %v, %v; want only %s", entries, err, queued)
+	}
+}
+
+// workEngine leaves a partial download and tells found whether an earlier
+// attempt left one. Its first fail calls fail; then it blocks until cancelled
+// if block is set, or else completes.
+type workEngine struct {
+	found chan bool
+	block bool
+	fail  int
+	err   error
+
+	mu    sync.Mutex
+	calls int
+}
+
+func newWorkEngine() *workEngine { return &workEngine{found: make(chan bool, 10)} }
+
+func (e *workEngine) Download(ctx context.Context, _ provider.Stream, out string, progress func(time.Duration, int64)) error {
+	e.mu.Lock()
+	e.calls++
+	failing := e.calls <= e.fail
+	e.mu.Unlock()
+	partial := filepath.Join(filepath.Dir(out), "partial")
+	_, err := os.Stat(partial)
+	e.found <- err == nil
+	if err := os.WriteFile(partial, nil, 0o666); err != nil {
+		return err
+	}
+	progress(30*time.Second, 7)
+	switch {
+	case failing:
+		return e.err
+	case e.block:
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	return os.WriteFile(out, []byte("media"), 0o644)
+}
+
+func waitGone(t *testing.T, path string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			return
+		}
+	}
+	t.Fatalf("%s not removed", path)
+}
+
+func exists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPauseKeepsWork(t *testing.T) {
+	e := newWorkEngine()
+	e.block = true
+	q := newQueue(t, t.TempDir(), &fakeProvider{}, e)
+	run(t, q)
+	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a", Duration: 60})
+	if <-e.found {
+		t.Fatal("a new job found a partial download")
+	}
+	if _, err := q.PauseJobs(id); err != nil {
+		t.Fatal(err)
+	}
+	j := waitJob(t, q, id, func(j Job) bool { return j.Status == StatusQueued })
+	if j.Fraction != 0.5 || j.Bytes != 7 {
+		t.Errorf("paused at %v, %d bytes; want the progress kept", j.Fraction, j.Bytes)
+	}
+	exists(t, filepath.Join(q.workDir(id), "partial"))
+	if _, err := q.ResumeJobs(id); err != nil {
+		t.Fatal(err)
+	}
+	if !<-e.found {
+		t.Error("the resumed job lost its partial download")
+	}
+}
+
+func TestShutdownKeepsWork(t *testing.T) {
+	dir := t.TempDir()
+	e := newWorkEngine()
+	e.block = true
+	q := newQueue(t, dir, &fakeProvider{}, e)
+	stop := run(t, q)
+	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	<-e.found
+	stop()
+	q.db.Close()
+
+	e = newWorkEngine()
+	q = newQueue(t, dir, &fakeProvider{}, e)
+	run(t, q)
+	if !<-e.found {
+		t.Error("the restarted job lost its partial download")
+	}
+	waitFinished(t, q, id)
+	waitGone(t, q.workDir(id))
+}
+
+func TestRetryKeepsWork(t *testing.T) {
+	e := newWorkEngine()
+	e.fail, e.err = 1, errors.New("boom")
+	q := startQueue(t, &fakeProvider{}, e)
+	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	if <-e.found || !<-e.found {
+		t.Error("the retry lost the partial download")
+	}
+	if j := waitFinished(t, q, id); j.Status != StatusCompleted {
+		t.Fatalf("status %s", j.Status)
+	}
+	waitGone(t, q.workDir(id))
+}
+
+func TestFailureRemovesWork(t *testing.T) {
+	e := newWorkEngine()
+	e.fail, e.err = 1, fmt.Errorf("%w: DRM", provider.ErrUnavailable)
+	q := startQueue(t, &fakeProvider{}, e)
+	id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+	if j := waitFinished(t, q, id); j.Status != StatusFailed {
+		t.Fatalf("status %s", j.Status)
+	}
+	waitGone(t, q.workDir(id))
+}
+
+func TestRemovingJobRemovesWork(t *testing.T) {
+	t.Run("running", func(t *testing.T) {
+		e := newWorkEngine()
+		e.block = true
+		q := startQueue(t, &fakeProvider{}, e)
+		id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+		<-e.found
+		if ok, err := q.Delete(id, false); !ok || err != nil {
+			t.Fatalf("Delete = %v, %v", ok, err)
+		}
+		waitGone(t, q.workDir(id))
+	})
+	t.Run("paused", func(t *testing.T) {
+		e := newWorkEngine()
+		e.block = true
+		q := startQueue(t, &fakeProvider{}, e)
+		id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+		<-e.found
+		if _, err := q.PauseJobs(id); err != nil {
+			t.Fatal(err)
+		}
+		waitJob(t, q, id, func(j Job) bool { return j.Status == StatusQueued })
+		exists(t, q.workDir(id))
+		if ok, err := q.Cancel(id); !ok || err != nil {
+			t.Fatalf("Cancel = %v, %v", ok, err)
+		}
+		if _, err := os.Stat(q.workDir(id)); !os.IsNotExist(err) {
+			t.Errorf("partial download kept: %v", err)
+		}
+	})
+	t.Run("waiting to retry", func(t *testing.T) {
+		e := newWorkEngine()
+		e.fail, e.err = 1, errors.New("boom")
+		q := startQueueWithDelay(t, &fakeProvider{}, e, time.Hour)
+		id := add(t, q, "a", "tv", 0, nzb.Ref{Provider: "fake", ID: "a"})
+		waitJob(t, q, id, func(j Job) bool { return j.Status == StatusQueued && j.Attempts == 1 })
+		exists(t, q.workDir(id))
+		if ok, err := q.Delete(id, false); !ok || err != nil {
+			t.Fatalf("Delete = %v, %v", ok, err)
+		}
+		if _, err := os.Stat(q.workDir(id)); !os.IsNotExist(err) {
+			t.Errorf("partial download kept: %v", err)
+		}
+	})
+}
+
+func TestTimeLeftAfterResume(t *testing.T) {
+	now := time.Now()
+	j := Job{Status: StatusDownloading, Started: now.Add(-10 * time.Second), Fraction: 0.6, startFraction: 0.5}
+	if got := j.TimeLeft(now); got != 40*time.Second {
+		t.Errorf("TimeLeft = %v, want 40s", got)
+	}
+	j.Fraction = 0.505
+	if got := j.TimeLeft(now); got != 0 {
+		t.Errorf("TimeLeft without progress = %v, want 0", got)
 	}
 }
 
