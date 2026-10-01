@@ -167,8 +167,9 @@ systemctl start magnetowid`)
 	}
 
 	// A VPN exit runs Gluetun with its instance's settings. Docker is faked: a
-	// script that records its arguments, behind a unit that does nothing.
-	c.sh(t, `printf '#!/bin/sh\necho "$@" >>/run/docker.args\n[ "$1" = run ] && exec sleep infinity\nexit 0\n' >/usr/bin/docker
+	// script that records its arguments, behind a unit that does nothing. Like
+	// Gluetun, its container exits with 1 when stopped.
+	c.sh(t, `printf '#!/bin/sh\necho "$@" >>/run/docker.args\nif [ "$1" = run ]; then trap "exit 1" TERM; sleep infinity & wait; fi\nexit 0\n' >/usr/bin/docker
 chmod +x /usr/bin/docker
 printf '[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n' >/run/systemd/system/docker.service
 install -m 600 /usr/share/magnetowid/vpn.env.example /etc/magnetowid/vpn-pl.env
@@ -193,6 +194,14 @@ systemctl restart magnetowid-vpn@pl`)
 			t.Errorf("the VPN exit ran docker %s, without %q", run, want)
 		}
 	}
+	// Stopping it is not a failure, and it comes back if it stops by itself.
+	c.sh(t, "systemctl stop magnetowid-vpn@pl")
+	if state, _ := c.try("systemctl is-active magnetowid-vpn@pl"); state != "inactive" {
+		t.Errorf("stopped VPN exit is %s, want inactive", state)
+	}
+	c.sh(t, "systemctl start magnetowid-vpn@pl && kill -TERM $(systemctl show -p MainPID --value magnetowid-vpn@pl)")
+	c.await(t, "systemctl show -p NRestarts --value magnetowid-vpn@pl", "1")
+	c.await(t, "systemctl is-active magnetowid-vpn@pl", "active")
 
 	pid := c.sh(t, "systemctl show -p MainPID --value magnetowid")
 	c.sh(t, d.upgrade)

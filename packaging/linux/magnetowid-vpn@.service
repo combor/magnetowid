@@ -31,8 +31,10 @@ ExecStart=/bin/sh -c '\
     --publish "127.0.0.1:$$MAGNETOWID_VPN_PORT:8888/tcp" \
     "$$MAGNETOWID_VPN_IMAGE"'
 ExecStop=/usr/bin/docker stop magnetowid-vpn-%i
-Restart=on-failure
+Restart=always
 RestartSec=10
+# Gluetun exits with 1 when it is stopped, too.
+SuccessExitStatus=1
 # An exit whose file isn't filled in fails once instead of restarting forever.
 RestartPreventExitStatus=78
 
