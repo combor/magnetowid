@@ -13,7 +13,7 @@ import (
 // sorted, and site IDs taken from URLs.
 func checkSeries(tvdbID int, o provider.SeriesOverride, site provider.Overridable) (provider.SeriesOverride, error) {
 	if tvdbID <= 0 {
-		return provider.SeriesOverride{}, invalid("TVDB ID %d is not positive", tvdbID)
+		return provider.SeriesOverride{}, invalid("", "TVDB ID %d is not positive", tvdbID)
 	}
 	var out provider.SeriesOverride
 	var err error
@@ -22,18 +22,18 @@ func checkSeries(tvdbID int, o provider.SeriesOverride, site provider.Overridabl
 	}
 	if o.ID != "" {
 		if out.ID, err = site.ParseID(o.ID); err != nil {
-			return provider.SeriesOverride{}, invalid("id: %v", err)
+			return provider.SeriesOverride{}, invalid("id", "id: %v", err)
 		}
 	}
 	seen := make(map[int]bool)
 	for _, r := range o.Seasons {
 		switch {
 		case r.Season < 1:
-			return provider.SeriesOverride{}, invalid("seasons: season %d is not a numbered TVDB season", r.Season)
+			return provider.SeriesOverride{}, invalid("seasons", "seasons: season %d is not a numbered TVDB season", r.Season)
 		case r.SiteSeason < 0:
-			return provider.SeriesOverride{}, invalid("seasons: site_season %d is negative", r.SiteSeason)
+			return provider.SeriesOverride{}, invalid("seasons", "seasons: site_season %d is negative", r.SiteSeason)
 		case seen[r.Season]:
-			return provider.SeriesOverride{}, invalid("seasons: season %d has two rules", r.Season)
+			return provider.SeriesOverride{}, invalid("seasons", "seasons: season %d has two rules", r.Season)
 		}
 		seen[r.Season] = true
 	}
@@ -49,21 +49,21 @@ func checkSeries(tvdbID int, o provider.SeriesOverride, site provider.Overridabl
 		for _, n := range numbers {
 			// Season 0 holds specials.
 			if n.Season < 0 || n.Episode < 1 {
-				return provider.SeriesOverride{}, invalid("episodes: %s is not a numbered TVDB episode", n)
+				return provider.SeriesOverride{}, invalid("episodes", "episodes: %s is not a numbered TVDB episode", n)
 			}
 			id, err := site.ParseID(o.Episodes[n])
 			if err != nil {
-				return provider.SeriesOverride{}, invalid("episodes: %s: %v", n, err)
+				return provider.SeriesOverride{}, invalid("episodes", "episodes: %s: %v", n, err)
 			}
 			if other, dup := pinned[id]; dup {
-				return provider.SeriesOverride{}, invalid("episodes: %s and %s both name %s", other, n, id)
+				return provider.SeriesOverride{}, invalid("episodes", "episodes: %s and %s both name %s", other, n, id)
 			}
 			pinned[id] = n
 			out.Episodes[n] = id
 		}
 	}
 	if len(out.Titles) == 0 && out.ID == "" && len(out.Seasons) == 0 && len(out.Episodes) == 0 {
-		return provider.SeriesOverride{}, invalid("an override needs titles, an id, seasons or episodes; DELETE removes one")
+		return provider.SeriesOverride{}, invalid("", "an override needs titles, an id, seasons or episodes; DELETE removes one")
 	}
 	return out, nil
 }
@@ -73,11 +73,11 @@ func checkFilm(title string, year int, o provider.FilmOverride, site provider.Ov
 	title = strings.TrimSpace(title)
 	switch {
 	case provider.NormalizeTitle(title) == "":
-		return provider.FilmOverride{}, invalid("film title %q has no letters or digits", title)
+		return provider.FilmOverride{}, invalid("title", "film title %q has no letters or digits", title)
 	case year <= 0:
-		return provider.FilmOverride{}, invalid("year %d is not positive", year)
+		return provider.FilmOverride{}, invalid("year", "year %d is not positive", year)
 	case (o.Title != "" || o.Year != 0) && provider.FilmKey(o.Title, o.Year) != provider.FilmKey(title, year):
-		return provider.FilmOverride{}, invalid("the override is for %q (%d), not %q (%d)", o.Title, o.Year, title, year)
+		return provider.FilmOverride{}, invalid("", "the override is for %q (%d), not %q (%d)", o.Title, o.Year, title, year)
 	}
 	out := provider.FilmOverride{Title: title, Year: year}
 	var err error
@@ -86,11 +86,11 @@ func checkFilm(title string, year int, o provider.FilmOverride, site provider.Ov
 	}
 	if o.ID != "" {
 		if out.ID, err = site.ParseID(o.ID); err != nil {
-			return provider.FilmOverride{}, invalid("id: %v", err)
+			return provider.FilmOverride{}, invalid("id", "id: %v", err)
 		}
 	}
 	if len(out.Titles) == 0 && out.ID == "" {
-		return provider.FilmOverride{}, invalid("an override needs titles or an id; DELETE removes one")
+		return provider.FilmOverride{}, invalid("", "an override needs titles or an id; DELETE removes one")
 	}
 	return out, nil
 }
@@ -102,7 +102,7 @@ func checkTitles(titles []string) ([]string, error) {
 		t = strings.TrimSpace(t)
 		n := provider.NormalizeTitle(t)
 		if n == "" {
-			return nil, invalid("titles: %q has no letters or digits", t)
+			return nil, invalid("titles", "titles: %q has no letters or digits", t)
 		}
 		if !seen[n] {
 			seen[n] = true

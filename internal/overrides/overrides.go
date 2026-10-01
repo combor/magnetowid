@@ -23,12 +23,20 @@ var bucket = []byte("overrides")
 var ErrUnknownSite = errors.New("no such site takes overrides")
 
 // InvalidError reports an override the store refuses.
-type InvalidError struct{ msg string }
+type InvalidError struct {
+	// Field is the part at fault: titles, id, seasons, episodes, or a film's
+	// title or year. It is empty if the override as a whole is.
+	Field string
+	msg   string
+}
 
 func (e *InvalidError) Error() string { return e.msg }
 
-func invalid(format string, args ...any) error {
-	return &InvalidError{fmt.Sprintf(format, args...)}
+// Reason is the error without the field's name, for showing beside the field.
+func (e *InvalidError) Reason() string { return strings.TrimPrefix(e.msg, e.Field+": ") }
+
+func invalid(field, format string, args ...any) error {
+	return &InvalidError{field, fmt.Sprintf(format, args...)}
 }
 
 // Store is safe for concurrent use.
