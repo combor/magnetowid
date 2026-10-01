@@ -1,0 +1,42 @@
+# A VPN exit for region-locked sites, one instance per country: magnetowid-vpn@pl
+# reads /etc/magnetowid/vpn-pl.env and serves that exit's HTTP proxy on a local
+# port. Requires Docker. Guide:
+# https://github.com/combor/magnetowid/blob/main/docs/vpn.md
+
+[Unit]
+Description=VPN exit %i for magnetowid
+Documentation=https://github.com/combor/magnetowid/blob/main/docs/vpn.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+# Ordering only: magnetowid pauses a site's downloads while its exit is down.
+Before=magnetowid.service
+
+[Service]
+Type=exec
+# Set MAGNETOWID_VPN_IMAGE in the exit's file to run another version. Gluetun
+# reads that file too and takes names such as PROXY_PORT for its own settings,
+# hence the prefix on this unit's.
+Environment=MAGNETOWID_VPN_IMAGE=qmcgaw/gluetun:v3
+EnvironmentFile=/etc/magnetowid/vpn-%i.env
+ExecStartPre=-/usr/bin/docker rm --force magnetowid-vpn-%i
+ExecStart=/bin/sh -c '\
+  if [ -z "$$VPN_SERVICE_PROVIDER" ] || [ -z "$$MAGNETOWID_VPN_PORT" ]; then \
+    echo "Set VPN_SERVICE_PROVIDER and MAGNETOWID_VPN_PORT in /etc/magnetowid/vpn-%i.env" >&2; \
+    exit 78; \
+  fi; \
+  exec /usr/bin/docker run --rm --name magnetowid-vpn-%i \
+    --cap-add NET_ADMIN --device /dev/net/tun \
+    --env-file /etc/magnetowid/vpn-%i.env \
+    --publish "127.0.0.1:$$MAGNETOWID_VPN_PORT:8888/tcp" \
+    "$$MAGNETOWID_VPN_IMAGE"'
+ExecStop=/usr/bin/docker stop magnetowid-vpn-%i
+Restart=always
+RestartSec=10
+# Gluetun exits with 1 when it is stopped, too.
+SuccessExitStatus=1
+# An exit whose file isn't filled in fails once instead of restarting forever.
+RestartPreventExitStatus=78
+
+[Install]
+WantedBy=multi-user.target

@@ -86,6 +86,7 @@ const master = `#EXTM3U
 type fakeProvider struct {
 	base        string
 	unavailable map[string]bool
+	transport   http.RoundTripper
 	mu          sync.Mutex
 	resolves    int
 }
@@ -103,8 +104,12 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	if f.unavailable[id] {
 		return provider.Stream{}, fmt.Errorf("%w: DRM-protected", provider.ErrUnavailable)
 	}
-	return provider.Stream{URL: f.base + "/" + id}, nil
+	return provider.Stream{URL: f.base + "/" + id, Transport: f.transport}, nil
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func (f *fakeProvider) count() int {
 	f.mu.Lock()
@@ -158,6 +163,22 @@ func TestProbe(t *testing.T) {
 	}
 	if _, err := pr.Probe(context.Background(), p, "noresolution.m3u8"); !errors.Is(err, errNoResolution) {
 		t.Errorf("no resolution: err = %v", err)
+	}
+}
+
+// The stream's transport, e.g. its site's proxy, fetches the playlist.
+func TestProbeUsesStreamTransport(t *testing.T) {
+	pr, p := newFixture(t, 0)
+	pr.Client = &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("wrong transport")
+	})}
+	fetched := 0
+	p.transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		fetched++
+		return http.DefaultTransport.RoundTrip(req)
+	})
+	if _, err := pr.Probe(context.Background(), p, "ok.m3u8"); err != nil || fetched != 1 {
+		t.Errorf("Probe: %v after %d requests on the stream's transport, want 1", err, fetched)
 	}
 }
 

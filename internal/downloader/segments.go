@@ -93,7 +93,8 @@ func (f *FFmpeg) downloadSegments(ctx context.Context, client *http.Client, h ht
 	if len(tracks) == 2 {
 		args = append(args, "-i", tracks[1].name+".m3u8")
 	}
-	err = f.run(ctx, dir, append(args, outputArgs(len(tracks), m.AudioLanguage, out)...), func(time.Duration, int64) {})
+	// The inputs are local files, so any environment will do.
+	err = f.run(ctx, dir, nil, append(args, outputArgs(len(tracks), m.AudioLanguage, out)...), func(time.Duration, int64) {})
 	if errors.Is(err, errDataLoss) || errors.Is(err, errUnreadable) {
 		// A damaged file on disk would fail every retry.
 		if rmErr := os.RemoveAll(dir); rmErr != nil {

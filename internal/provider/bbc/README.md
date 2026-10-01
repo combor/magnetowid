@@ -6,7 +6,8 @@ See [Setup and configuration](../../../docs/usage.md) for connection settings.
 
 iPlayer streams only to the UK, where watching or downloading BBC programmes
 requires a TV licence. Elsewhere, searches find programmes but leave every
-release out as unavailable.
+release out as unavailable; [Region-locked sites](../../../docs/vpn.md) shows
+how to give iPlayer a UK connection of its own.
 
 ## Series
 

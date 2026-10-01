@@ -204,7 +204,7 @@ func (pr *Prober) probe(ctx context.Context, p provider.Provider, id string) (In
 		if s, err = p.Resolve(ctx, id); err == nil {
 			var m hls.Master
 			var ok bool
-			if m, ok, err = hls.Load(ctx, client, s); err == nil {
+			if m, ok, err = hls.Load(ctx, s.Client(client), s); err == nil {
 				if !ok {
 					return Info{}, ErrNotHLS
 				}

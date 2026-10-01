@@ -70,10 +70,23 @@ type Item struct {
 type Stream struct {
 	URL    string // anything ffmpeg can open
 	Header http.Header
+	// Reaches the site, e.g. through its proxy, to fetch the stream and its
+	// subtitles; nil leaves the choice to the caller.
+	Transport http.RoundTripper
 	// The HLS master playlist at URL, if the provider has amended it, e.g. to
 	// add variants the site omits. Its relative URIs resolve against URL.
 	Playlist  string
 	Subtitles []Subtitle // saved next to the video
+}
+
+// Client returns c, on the stream's Transport if it has one.
+func (s Stream) Client(c *http.Client) *http.Client {
+	if s.Transport == nil {
+		return c
+	}
+	site := *c
+	site.Transport = s.Transport
+	return &site
 }
 
 type Subtitle struct {

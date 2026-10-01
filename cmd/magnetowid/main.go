@@ -2,6 +2,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -45,13 +46,21 @@ func main() {
 
 func run(log *slog.Logger, level *slog.LevelVar) error {
 	listen := flag.String("listen", envOr("MAGNETOWID_LISTEN", ":8484"), "listen address")
-	apiKey := flag.String("api-key", os.Getenv("MAGNETOWID_API_KEY"), "API key for both APIs (required)")
+	// Usage prints flag defaults, so settings that hold secrets, the API key and
+	// a proxy URL's password, get theirs from the environment after parsing.
+	apiKey := flag.String("api-key", "", "API key for both APIs (required)")
 	downloadDir := flag.String("download-dir", os.Getenv("MAGNETOWID_DOWNLOAD_DIR"), "where finished downloads go (required)")
 	categories := flag.String("categories", envOr("MAGNETOWID_CATEGORIES", "tv,movies"), "comma-separated download categories")
 	ffmpeg := flag.String("ffmpeg", envOr("MAGNETOWID_FFMPEG", "ffmpeg"), "ffmpeg binary")
 	logLevel := flag.String("log-level", envOr("MAGNETOWID_LOG_LEVEL", "info"), "log level: debug, info, warn or error")
+	const proxyUsage = `'s HTTP proxy, e.g. http://127.0.0.1:8888, or "direct" for none (default: the environment's)`
+	tvpProxy := flag.String("tvp-proxy", "", "TVP VOD"+proxyUsage)
+	bbcProxy := flag.String("bbc-proxy", "", "BBC iPlayer"+proxyUsage)
 	healthcheck := flag.Bool("healthcheck", false, "ask the magnetowid at the listen address whether it is healthy, and exit")
 	flag.Parse()
+	*apiKey = cmp.Or(*apiKey, os.Getenv("MAGNETOWID_API_KEY"))
+	*tvpProxy = cmp.Or(*tvpProxy, os.Getenv("MAGNETOWID_TVP_PROXY"))
+	*bbcProxy = cmp.Or(*bbcProxy, os.Getenv("MAGNETOWID_BBC_PROXY"))
 
 	if *healthcheck {
 		return checkHealth(*listen)
@@ -88,12 +97,20 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 	}
 	defer db.Close()
 
-	httpClient := &http.Client{Timeout: 30 * time.Second}
-	tvpProvider, err := tvp.New(httpClient, log, db)
+	// Each site streams to its own country, so each has its own connection.
+	tvpClient, err := siteClient(*tvpProxy)
+	if err != nil {
+		return fmt.Errorf("-tvp-proxy: %w", err)
+	}
+	bbcClient, err := siteClient(*bbcProxy)
+	if err != nil {
+		return fmt.Errorf("-bbc-proxy: %w", err)
+	}
+	tvpProvider, err := tvp.New(tvpClient, log, db)
 	if err != nil {
 		return err
 	}
-	bbcProvider, err := bbc.New(httpClient, log, db)
+	bbcProvider, err := bbc.New(bbcClient, log, db)
 	if err != nil {
 		return err
 	}
@@ -111,7 +128,8 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 		return err
 	}
 	mux := http.NewServeMux()
-	prober := &probe.Prober{Client: httpClient}
+	// Streams bring their site's connection.
+	prober := &probe.Prober{Client: &http.Client{Timeout: siteTimeout}}
 	mux.Handle("/{provider}/api", &newznab.Handler{Providers: providers, APIKey: *apiKey, Probe: prober, Log: log})
 	mux.Handle("/api", &sabnzbd.Handler{Queue: queue, APIKey: *apiKey, Categories: cats, Log: log})
 	(&overrides.Handler{Store: overrideStore, APIKey: *apiKey, Log: log}).Register(mux)
@@ -130,7 +148,8 @@ func run(log *slog.Logger, level *slog.LevelVar) error {
 	srv := &http.Server{Addr: *listen, Handler: logRequests(log, mux), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("magnetowid listening", "version", version, "addr", *listen, "download_dir", dir, "providers", providers.Names())
+	log.Info("magnetowid listening", "version", version, "addr", *listen, "download_dir", dir, "providers", providers.Names(),
+		"tvp_proxy", proxyName(*tvpProxy), "bbc_proxy", proxyName(*bbcProxy))
 
 	var serveErr error
 	select {
@@ -166,6 +185,53 @@ func logRequests(log *slog.Logger, next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+const (
+	siteTimeout = 30 * time.Second
+	// Skips the environment's proxy.
+	directProxy = "direct"
+)
+
+// siteClient returns the client for a site's API and streams. proxy is an HTTP
+// proxy's URL or "direct". Left empty, the client has no transport of its own:
+// the site and its streams follow the environment's HTTPS_PROXY and NO_PROXY,
+// which choose by host, and ffmpeg applies the environment's rules itself.
+func siteClient(proxy string) (*http.Client, error) {
+	client := &http.Client{Timeout: siteTimeout}
+	if proxy == "" {
+		return client, nil
+	}
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	// Keep a connection for each of a download's segment workers.
+	t.MaxIdleConnsPerHost = 4
+	t.Proxy = nil
+	if proxy != directProxy {
+		// ffmpeg, which fetches some streams itself, tunnels through nothing else.
+		u, err := url.Parse(proxy)
+		if err != nil || u.Scheme != "http" || u.Host == "" {
+			// The URL may hold a password.
+			return nil, fmt.Errorf("want an http:// proxy URL or %q", directProxy)
+		}
+		t.Proxy = http.ProxyURL(u)
+	}
+	client.Transport = t
+	return client, nil
+}
+
+// proxyName describes a valid proxy setting for the log, without its password.
+func proxyName(proxy string) string {
+	switch proxy {
+	case "":
+		return "environment"
+	case directProxy:
+		return proxy
+	}
+	u, err := url.Parse(proxy)
+	if err != nil {
+		return "invalid"
+	}
+	return u.Redacted()
 }
 
 func checkHealth(listen string) error {

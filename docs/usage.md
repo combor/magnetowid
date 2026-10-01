@@ -7,7 +7,9 @@ magnetowid exposes two APIs for Sonarr and Radarr:
 
 Supported sites: **TVP VOD** (`tvp`) and **BBC iPlayer** (`bbc`). See the
 [TVP VOD notes](../internal/provider/tvp/README.md) and the
-[BBC iPlayer notes](../internal/provider/bbc/README.md).
+[BBC iPlayer notes](../internal/provider/bbc/README.md). Sites limit their
+streams to their own country; [Region-locked sites](vpn.md) shows how to use
+them from elsewhere.
 
 ## Install and run
 
@@ -65,6 +67,9 @@ Group=yourgroup
 
 Run `sudo systemctl restart magnetowid` after changing settings.
 
+The packages also install `magnetowid-vpn@.service`, which stays unused until
+you set up a VPN exit for a [region-locked site](vpn.md).
+
 ### Build from source
 
 Requires Go 1.27.1+ and ffmpeg.
@@ -94,6 +99,8 @@ section in `compose.yaml`. For the Linux service, set them in
 | `-categories` | `MAGNETOWID_CATEGORIES` | `tv,movies` | download categories to offer |
 | `-ffmpeg` | `MAGNETOWID_FFMPEG` | `ffmpeg` | ffmpeg binary |
 | `-log-level` | `MAGNETOWID_LOG_LEVEL` | `info` | `debug`, `info`, `warn`, or `error`; debug includes requests and RSS activity |
+| `-tvp-proxy` | `MAGNETOWID_TVP_PROXY` | | TVP VOD's HTTP proxy, e.g. `http://127.0.0.1:8888`, or `direct`; see [Region-locked sites](vpn.md) |
+| `-bbc-proxy` | `MAGNETOWID_BBC_PROXY` | | BBC iPlayer's HTTP proxy, or `direct`; see [Region-locked sites](vpn.md) |
 
 `GET /health` returns `OK` without an API key. The container health check runs
 `magnetowid -healthcheck`, which queries `MAGNETOWID_LISTEN` and exits with 0
@@ -291,6 +298,7 @@ the queue and history, with the last error of each failed or retrying job.
 | Downloads finish but are not imported | Mount the shared folder into Sonarr/Radarr, check file permissions and add a Remote Path Mapping if the paths differ. |
 | A magnetowid release is sent to another download client | Set the indexer's **Download Client** to `magnetowid`. |
 | Downloads stay queued with `provider unreachable` in the log | Check the network, DNS, and VPN. Jobs resume automatically when the site becomes reachable, without consuming retries. |
+| One site finds nothing, or the log shows its results as `unavailable` | The site refuses streams outside its country. See [Region-locked sites](vpn.md). |
 | A series or film is missing, or its episodes are wrong | Check that the site has it for free, then add an [override](#correcting-matches). |
 
 To inspect recent container messages:

@@ -44,11 +44,12 @@ itself. No separate SABnzbd installation is needed.
 
 | Site | Indexer | Good to know |
 |---|---|---|
-| **TVP VOD** | `/tvp` | Polish series and films. [TVP VOD notes](internal/provider/tvp/README.md) |
+| **TVP VOD** | `/tvp` | Polish series and films. Streams may need a Polish connection. [TVP VOD notes](internal/provider/tvp/README.md) |
 | **BBC iPlayer** | `/bbc` | Streams need a UK connection. [BBC iPlayer notes](internal/provider/bbc/README.md) |
 
 Only what a site offers for free is found: DRM-protected, paid and
-region-blocked streams are left out of the results.
+region-blocked streams are left out of the results. To use a site from another
+country, give it a VPN exit: see [Region-locked sites](docs/vpn.md).
 
 ## What you get
 
@@ -156,6 +157,7 @@ See [Web interface](docs/usage.md#web-interface) for the details.
 ## Documentation
 
 - [Setup and configuration](docs/usage.md): installation options and every setting.
+- [Region-locked sites](docs/vpn.md): a VPN exit for each site's country.
 - [Correcting matches](docs/usage.md#correcting-matches): overrides for titles, seasons and single episodes.
 - [Troubleshooting](docs/usage.md#troubleshooting): help with connections, downloads and imports.
 - [Limitations](docs/usage.md#limitations): what magnetowid can't do.

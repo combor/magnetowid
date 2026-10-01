@@ -61,7 +61,7 @@ chown builder ./*
 runuser -u builder -- makepkg --nodeps
 pacman -U --noconfirm magnetowid-bin-*.pkg.tar.zst`,
 		upgrade: "pacman -U --noconfirm /build/magnetowid-bin-*.pkg.tar.zst",
-		remove:  "systemctl disable --now magnetowid && pacman -R --noconfirm magnetowid-bin",
+		remove:  "systemctl disable --now magnetowid magnetowid-vpn@pl && pacman -R --noconfirm magnetowid-bin",
 		x264:    true,
 	},
 }
@@ -166,19 +166,63 @@ systemctl start magnetowid`)
 		t.Errorf("category folder is %s, want 775 magnetowid:media", got)
 	}
 
+	// A VPN exit runs Gluetun with its instance's settings. Docker is faked: a
+	// script that records its arguments, behind a unit that does nothing. Like
+	// Gluetun, its container exits with 1 when stopped.
+	c.sh(t, `printf '#!/bin/sh\necho "$@" >>/run/docker.args\nif [ "$1" = run ]; then trap "exit 1" TERM; sleep infinity & wait; fi\nexit 0\n' >/usr/bin/docker
+chmod +x /usr/bin/docker
+printf '[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart=/bin/true\n' >/run/systemd/system/docker.service
+install -m 600 /usr/share/magnetowid/vpn.env.example /etc/magnetowid/vpn-pl.env
+systemctl daemon-reload
+systemctl enable --now magnetowid-vpn@pl`)
+	// The example names no VPN provider, so the exit must fail without retrying.
+	c.await(t, "systemctl is-failed magnetowid-vpn@pl", "failed")
+	if got := c.sh(t, "systemctl show -p ExecMainStatus -p NRestarts magnetowid-vpn@pl | sort | tr '\\n' ' '"); got != "ExecMainStatus=78 NRestarts=0" {
+		t.Errorf("the VPN exit without a provider ended with %s", got)
+	}
+	if run, _ := c.try("grep '^run ' /run/docker.args"); run != "" {
+		t.Errorf("the VPN exit ran docker %s without a provider", run)
+	}
+	c.sh(t, `sed -i 's/^VPN_SERVICE_PROVIDER=$/VPN_SERVICE_PROVIDER=example/; s/^MAGNETOWID_VPN_PORT=.*/MAGNETOWID_VPN_PORT=8889/' /etc/magnetowid/vpn-pl.env
+systemctl restart magnetowid-vpn@pl`)
+	c.await(t, "systemctl is-active magnetowid-vpn@pl", "active")
+	run := c.sh(t, "grep '^run ' /run/docker.args")
+	// Gluetun's proxy stays on its own port, whatever the local one.
+	for _, want := range []string{"--name magnetowid-vpn-pl ", "--env-file /etc/magnetowid/vpn-pl.env ",
+		"--publish 127.0.0.1:8889:8888/tcp ", " qmcgaw/gluetun:"} {
+		if !strings.Contains(run, want) {
+			t.Errorf("the VPN exit ran docker %s, without %q", run, want)
+		}
+	}
+	// Stopping it is not a failure, and it comes back if it stops by itself.
+	c.sh(t, "systemctl stop magnetowid-vpn@pl")
+	if state, _ := c.try("systemctl is-active magnetowid-vpn@pl"); state != "inactive" {
+		t.Errorf("stopped VPN exit is %s, want inactive", state)
+	}
+	c.sh(t, "systemctl start magnetowid-vpn@pl && kill -TERM $(systemctl show -p MainPID --value magnetowid-vpn@pl)")
+	c.await(t, "systemctl show -p NRestarts --value magnetowid-vpn@pl", "1")
+	c.await(t, "systemctl is-active magnetowid-vpn@pl", "active")
+
 	pid := c.sh(t, "systemctl show -p MainPID --value magnetowid")
 	c.sh(t, d.upgrade)
 	if got := c.sh(t, "systemctl show -p MainPID --value magnetowid"); (got != pid) != d.restarts {
 		t.Errorf("upgrade changed the main PID from %s to %s, want a restart: %v", pid, got, d.restarts)
 	}
 	checkAPIs(ctx, t, base, apiKey, downloadDir)
+	if state, _ := c.try("systemctl is-active magnetowid-vpn@pl"); state != "active" {
+		t.Errorf("upgraded package's VPN exit is %s, want active", state)
+	}
 
 	c.sh(t, d.remove)
-	if state, _ := c.try("systemctl is-active magnetowid"); state != "inactive" {
-		t.Errorf("removed service is %s, want inactive", state)
+	for _, unit := range []string{"magnetowid", "magnetowid-vpn@pl"} {
+		if state, _ := c.try("systemctl is-active " + unit); state != "inactive" {
+			t.Errorf("removed package's %s is %s, want inactive", unit, state)
+		}
+		c.sh(t, "test ! -e /etc/systemd/system/multi-user.target.wants/"+unit+".service")
 	}
 	c.sh(t, "test ! -e /usr/lib/systemd/system/magnetowid.service")
-	c.sh(t, "test ! -e /etc/systemd/system/multi-user.target.wants/magnetowid.service")
+	c.sh(t, "test ! -e /usr/lib/systemd/system/magnetowid-vpn@.service")
+	c.sh(t, "test ! -e /usr/share/magnetowid/vpn.env.example")
 }
 
 type container struct {

@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,8 +34,9 @@ const playlistTimeout = 30 * time.Second
 // Neither transcodes.
 type FFmpeg struct {
 	Path string // binary; "ffmpeg" if empty
-	// Fetches playlists and segments; nil uses a default. Each download gets
-	// its own copy, with a cookie jar if the client has none.
+	// Fetches playlists and segments, on the stream's Transport if it has one;
+	// nil uses a default. Each download gets its own copy, with a cookie jar
+	// if the client has none.
 	Client *http.Client
 	Log    *slog.Logger // nil discards
 	// Zero defaults to 5 minutes, allowing for +faststart's silent final pass.
@@ -81,6 +83,7 @@ func (f *FFmpeg) Download(ctx context.Context, s provider.Stream, out string, pr
 		c := *f.Client
 		client = &c
 	}
+	client = s.Client(client)
 	if client.Jar == nil {
 		// ffmpeg sends a playlist's cookies with its segments too.
 		client.Jar, _ = cookiejar.New(nil)
@@ -108,13 +111,52 @@ func (f *FFmpeg) Download(ctx context.Context, s provider.Stream, out string, pr
 	if err := os.RemoveAll(dir); err != nil {
 		return err
 	}
+	env, err := proxyEnv(s)
+	if err != nil {
+		return err
+	}
 	inputs := directInputs(s, m, master)
 	var args []string
 	for _, in := range inputs {
 		args = append(args, headerArgs(s.Header)...)
 		args = append(args, "-i", in)
 	}
-	return f.run(ctx, "", append(args, outputArgs(len(inputs), m.AudioLanguage, out)...), progress)
+	return f.run(ctx, "", env, append(args, outputArgs(len(inputs), m.AudioLanguage, out)...), progress)
+}
+
+// proxyEnv returns the environment in which ffmpeg reaches the stream as its
+// Transport does, or nil, magnetowid's own, for a stream without one. ffmpeg
+// reads http_proxy for HTTP and HTTPS alike.
+//
+// The proxy for the stream's URL then serves every host ffmpeg fetches from,
+// renditions and segments included, so a Transport must use one proxy for all
+// hosts. Proxies chosen by host, as the environment's are, need a stream
+// without a Transport: ffmpeg applies the environment's rules itself.
+func proxyEnv(s provider.Stream) ([]string, error) {
+	t, ok := s.Transport.(*http.Transport)
+	if !ok {
+		return nil, nil
+	}
+	env := slices.DeleteFunc(os.Environ(), func(kv string) bool {
+		k, _, _ := strings.Cut(kv, "=")
+		return strings.EqualFold(k, "http_proxy") || strings.EqualFold(k, "no_proxy")
+	})
+	if t.Proxy == nil {
+		return env, nil
+	}
+	req, err := http.NewRequest(http.MethodGet, s.URL, nil)
+	if err != nil {
+		return nil, err
+	}
+	// A proxy that can't be determined must not become a direct connection.
+	proxy, err := t.Proxy(req)
+	if err != nil {
+		return nil, fmt.Errorf("finding the stream's proxy: %w", err)
+	}
+	if proxy != nil {
+		env = append(env, "http_proxy="+proxy.String())
+	}
+	return env, nil
 }
 
 func (f *FFmpeg) log() *slog.Logger {
@@ -175,8 +217,9 @@ func (f *FFmpeg) binary() (string, error) {
 	return bin, nil
 }
 
-// run runs ffmpeg in dir, or the current folder if dir is empty.
-func (f *FFmpeg) run(parent context.Context, dir string, args []string, progress func(time.Duration, int64)) error {
+// run runs ffmpeg in dir, or the current folder if dir is empty, with env, or
+// magnetowid's environment if env is nil.
+func (f *FFmpeg) run(parent context.Context, dir string, env, args []string, progress func(time.Duration, int64)) error {
 	bin, err := f.binary()
 	if err != nil {
 		return err
@@ -191,6 +234,7 @@ func (f *FFmpeg) run(parent context.Context, dir string, args []string, progress
 	args = append([]string{"-nostdin", "-hide_banner", "-loglevel", "warning", "-y"}, args...)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
+	cmd.Env = env
 	cmd.WaitDelay = 5 * time.Second
 	// Isolate ffmpeg from terminal signals so magnetowid can requeue interrupted jobs.
 	cmd.SysProcAttr = ownProcessGroup()
