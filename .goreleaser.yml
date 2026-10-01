@@ -63,6 +63,12 @@ archives:
       - src: packaging/linux/magnetowid.{service,sysusers,env}
         dst: systemd
         strip_parent: true
+      - src: packaging/linux/magnetowid-vpn@.service
+        dst: systemd
+        strip_parent: true
+      - src: vpn.env.example
+        dst: systemd
+        strip_parent: true
 
 checksum:
   name_template: '{{ .ProjectName }}_{{ .Version }}_SHA256SUMS'
@@ -106,6 +112,13 @@ nfpms:
         dst: /usr/lib/systemd/system/magnetowid.service
       - src: packaging/linux/magnetowid.sysusers
         dst: /usr/lib/sysusers.d/magnetowid.conf
+      - src: packaging/linux/magnetowid-vpn@.service
+        dst: /usr/lib/systemd/system/magnetowid-vpn@.service
+      # Outside /usr/share/doc, which minimal installs leave out.
+      - dst: /usr/share/magnetowid
+        type: dir
+      - src: vpn.env.example
+        dst: /usr/share/magnetowid/vpn.env.example
       - dst: /etc/magnetowid
         type: dir
       - src: packaging/linux/magnetowid.env
@@ -135,6 +148,8 @@ aurs:
     depends:
       - ca-certificates
       - ffmpeg
+    optdepends:
+      - 'docker: VPN exits for region-locked sites'
     backup:
       - etc/magnetowid/magnetowid.env
     install: packaging/linux/magnetowid.install
@@ -142,7 +157,9 @@ aurs:
       install -Dm755 "./magnetowid" "${pkgdir}/usr/bin/magnetowid"
       install -Dm644 "./LICENSE" "${pkgdir}/usr/share/licenses/magnetowid-bin/LICENSE"
       install -Dm644 "./systemd/magnetowid.service" "${pkgdir}/usr/lib/systemd/system/magnetowid.service"
+      install -Dm644 "./systemd/magnetowid-vpn@.service" "${pkgdir}/usr/lib/systemd/system/magnetowid-vpn@.service"
       install -Dm644 "./systemd/magnetowid.sysusers" "${pkgdir}/usr/lib/sysusers.d/magnetowid.conf"
+      install -Dm644 "./systemd/vpn.env.example" "${pkgdir}/usr/share/magnetowid/vpn.env.example"
       install -Dm600 "./systemd/magnetowid.env" "${pkgdir}/etc/magnetowid/magnetowid.env"
 
 homebrew_casks:
