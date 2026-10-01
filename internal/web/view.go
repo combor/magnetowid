@@ -193,6 +193,9 @@ func newJobView(j downloader.Job, retry, now time.Time) jobView {
 	switch {
 	case j.Paused:
 		v.Status, v.Tone = "Paused", "warn"
+		if v.Percent > 0 {
+			v.Status = fmt.Sprintf("Paused at %d%%", v.Percent)
+		}
 	case j.Status == downloader.StatusDownloading:
 		v.Status = "Downloading"
 		v.Left = timeLeft(j.TimeLeft(now))

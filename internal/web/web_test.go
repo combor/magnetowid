@@ -527,6 +527,8 @@ func TestRenderStates(t *testing.T) {
 		Started: now, Ref: nzb.Ref{Provider: "tvp"}}
 	failing := downloader.Job{Name: "x", Status: downloader.StatusQueued, RetryAt: now.Add(time.Minute), Error: "<b>boom</b>"}
 	paused := downloader.Job{ID: "p1", Name: "Paused.S01E01.1080p-TVP", Status: downloader.StatusQueued, Paused: true}
+	partial := paused
+	partial.Fraction = 0.4
 	for _, tc := range []struct {
 		v    queueView
 		want []string
@@ -540,7 +542,9 @@ func TestRenderStates(t *testing.T) {
 		{newQueueView([]downloader.Job{failing}, false, nil, "", now), []string{"Queued</h2>", `data-state="waiting"`,
 			`action="/ui/queue/pause"`, "Pause<span", `action="/ui/queue//pause"`, "Remove it from the queue?"}},
 		{newQueueView([]downloader.Job{running}, false, nil, "", now), []string{"Stop and remove this download?",
-			"the download restarts from the beginning"}},
+			"Its partial download is deleted."}},
+		{newQueueView([]downloader.Job{partial}, false, nil, "", now), []string{"Paused at 40%", "Remove it from the queue?",
+			"Its partial download is deleted."}},
 		{newQueueView(nil, true, nil, "", now), []string{"Resume<span", `action="/ui/queue/resume"`}},
 		{newQueueView([]downloader.Job{paused}, false, nil, "", now), []string{`action="/ui/queue/p1/resume"`, "Resume Paused S01E01"}},
 	} {

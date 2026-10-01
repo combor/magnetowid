@@ -57,6 +57,8 @@ var (
 	errPaused      = errors.New("paused")
 )
 
+// Engine may keep partial downloads in out's folder, which stays until the job
+// finishes or is removed.
 type Engine interface {
 	Download(ctx context.Context, s provider.Stream, out string, progress func(done time.Duration, bytes int64)) error
 }
@@ -81,6 +83,8 @@ type Job struct {
 	Priority int       `json:"priority,omitzero"` // -1 low, 0 normal, 1 high, 2 force
 	// Separate from Status so older versions can still load paused jobs.
 	Paused bool `json:"paused,omitzero"`
+
+	startFraction float64 // when this attempt's progress began; not saved
 }
 
 // Assume 4 Mbit/s until ffmpeg reports progress.
@@ -96,10 +100,11 @@ func (j Job) EstimatedSize() int64 {
 
 // TimeLeft is zero until a running download has made some progress.
 func (j Job) TimeLeft(now time.Time) time.Duration {
-	if j.Status != StatusDownloading || j.Fraction <= 0.01 {
+	gained := j.Fraction - j.startFraction
+	if j.Status != StatusDownloading || gained <= 0.01 {
 		return 0
 	}
-	return time.Duration(float64(now.Sub(j.Started)) * (1 - j.Fraction) / j.Fraction)
+	return time.Duration(float64(now.Sub(j.Started)) * (1 - j.Fraction) / gained)
 }
 
 // HistoryRetention is how long finished jobs are kept.
@@ -141,10 +146,6 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 	if err != nil {
 		return nil, err
 	}
-	// Before the worker starts, all work folders are crash leftovers.
-	if err := os.RemoveAll(filepath.Join(dir, incompleteDir)); err != nil {
-		log.Warn("removing unfinished downloads", "err", err)
-	}
 	q := &Queue{
 		dir:        dir,
 		providers:  providers,
@@ -163,7 +164,29 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 		q.order = append(q.order, j.ID)
 	}
 	q.prune(time.Now())
+	q.cleanWork()
 	return q, nil
+}
+
+// cleanWork removes partial downloads that no job will continue.
+func (q *Queue) cleanWork() {
+	entries, err := os.ReadDir(filepath.Join(q.dir, incompleteDir))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		q.log.Warn("listing unfinished downloads", "err", err)
+	}
+	for _, e := range entries {
+		if j := q.jobs[e.Name()]; j == nil || j.Status == StatusCompleted || j.Status == StatusFailed {
+			q.removeWork(e.Name())
+		}
+	}
+}
+
+func (q *Queue) workDir(id string) string { return filepath.Join(q.dir, incompleteDir, id) }
+
+func (q *Queue) removeWork(id string) {
+	if err := os.RemoveAll(q.workDir(id)); err != nil {
+		q.log.Warn("removing an unfinished download", "id", id, "err", err)
+	}
 }
 
 func (q *Queue) Dir() string { return q.dir }
@@ -220,8 +243,8 @@ func (q *Queue) Outages() map[string]time.Time {
 	return out
 }
 
-// SetPaused stops or resumes the queue. Resumed downloads restart from the beginning.
-// A save failure leaves the queue unchanged.
+// SetPaused stops or resumes the queue. Stopped downloads continue where they
+// left off. A save failure leaves the queue unchanged.
 func (q *Queue) SetPaused(paused bool) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -244,8 +267,8 @@ func (q *Queue) SetPaused(paused bool) error {
 	return nil
 }
 
-// PauseJobs returns affected IDs. Resumed downloads restart from the beginning.
-// On a save failure, earlier changes remain applied.
+// PauseJobs returns affected IDs. Stopped downloads continue where they left
+// off. On a save failure, earlier changes remain applied.
 func (q *Queue) PauseJobs(ids ...string) ([]string, error) {
 	return q.setJobsPaused(true, ids)
 }
@@ -329,6 +352,8 @@ func (q *Queue) discard(id string, deleteFiles, unfinishedOnly bool) (bool, erro
 		q.mu.Unlock()
 		return false, err
 	}
+	// A running job's worker removes its files once the engine stops.
+	running := job.Status == StatusDownloading
 	delete(q.jobs, id)
 	for i, v := range q.order {
 		if v == id {
@@ -347,6 +372,9 @@ func (q *Queue) discard(id string, deleteFiles, unfinishedOnly bool) (bool, erro
 
 	if cancel != nil {
 		cancel(nil)
+	}
+	if !running {
+		q.removeWork(id)
 	}
 	q.log.Info("job deleted", "id", id, "delete_files", deleteFiles)
 	return true, nil
@@ -414,6 +442,7 @@ func (q *Queue) next() (id string, wait time.Duration, ok bool) {
 	}
 	best.Status = StatusDownloading
 	best.Started = now
+	best.startFraction = best.Fraction
 	best.Attempts++
 	return best.ID, 0, true
 }
@@ -426,6 +455,8 @@ func (q *Queue) process(parent context.Context, id string) {
 	job, ok := q.jobs[id]
 	if !ok {
 		q.mu.Unlock()
+		// Deleted after next selected it, so discard left the files to us.
+		q.removeWork(id)
 		return
 	}
 	q.cancels[id] = cancel
@@ -437,22 +468,26 @@ func (q *Queue) process(parent context.Context, id string) {
 	q.mu.Unlock()
 
 	q.log.Info("job started", "id", id, "name", j.Name)
-	work := filepath.Join(q.dir, incompleteDir, id)
-	storage, err := q.run(ctx, id, j, work)
-	if rmErr := os.RemoveAll(work); rmErr != nil {
-		q.log.Warn("removing work dir", "id", id, "err", rmErr)
+	storage, err := q.run(ctx, id, j, q.workDir(id))
+	// Finished and deleted jobs never run again, so their files can go unlocked.
+	if !q.finish(parent, ctx, id, storage, err) {
+		q.removeWork(id)
 	}
+}
 
+// finish records an attempt's outcome. keep reports whether the job may
+// continue its partial download.
+func (q *Queue) finish(parent, ctx context.Context, id, storage string, err error) (keep bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	delete(q.cancels, id)
-	job, ok = q.jobs[id]
+	job, ok := q.jobs[id]
 	if !ok {
 		// Deleted while running.
 		if storage != "" {
 			os.RemoveAll(storage)
 		}
-		return
+		return false
 	}
 	// Persist outcomes, not running progress, so crashes leave jobs queued for retry.
 	defer func() {
@@ -465,12 +500,12 @@ func (q *Queue) process(parent context.Context, id string) {
 		// Shutdown does not consume a retry.
 		requeue(job)
 		q.log.Info("job interrupted, requeued", "id", id, "name", job.Name)
-		return
+		return true
 	}
 	if err != nil && errors.Is(context.Cause(ctx), errPaused) {
 		requeue(job)
 		q.log.Info("job stopped by a pause, requeued", "id", id, "name", job.Name)
-		return
+		return true
 	}
 	if errors.Is(err, errUnreachable) {
 		// Provider outages pause all its jobs without consuming retries.
@@ -486,7 +521,7 @@ func (q *Queue) process(parent context.Context, id string) {
 		o.until = time.Now().Add(delay)
 		q.log.Warn("pausing provider's jobs", "provider", job.Ref.Provider,
 			"retry_in", delay, "err", err)
-		return
+		return true
 	}
 	delete(q.outages, job.Ref.Provider)
 	job.Finished = time.Now()
@@ -496,20 +531,20 @@ func (q *Queue) process(parent context.Context, id string) {
 			delay := q.retryDelay(job.Attempts)
 			job.Status = StatusQueued
 			job.RetryAt = job.Finished.Add(delay)
-			job.Fraction, job.Bytes = 0, 0
 			q.log.Warn("job attempt failed, will retry", "id", id, "name", job.Name,
 				"attempt", job.Attempts, "retry_in", delay, "err", err)
-			return
+			return true
 		}
 		job.Status = StatusFailed
 		q.log.Error("job failed", "id", id, "name", job.Name, "attempts", job.Attempts, "err", err)
-		return
+		return false
 	}
 	job.Status = StatusCompleted
 	job.Error = ""
 	job.Fraction = 1
 	job.Storage = storage
 	q.log.Info("job completed", "id", id, "name", job.Name, "storage", storage, "bytes", job.Bytes)
+	return false
 }
 
 // prune removes expired history but keeps downloaded files. Requires q.mu.
@@ -536,11 +571,10 @@ func (q *Queue) prune(now time.Time) {
 	q.log.Info("forgot old finished jobs", "count", len(old))
 }
 
-// Requeue without consuming a retry.
+// Requeue without consuming a retry. Progress stays with the partial download.
 func requeue(job *Job) {
 	job.Status = StatusQueued
 	job.Attempts--
-	job.Fraction, job.Bytes = 0, 0
 }
 
 // offline distinguishes network failures from item-specific errors.
@@ -568,6 +602,7 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 	}
 	out := filepath.Join(work, j.Name+".mp4")
 	duration := time.Duration(j.Ref.Duration) * time.Second
+	first := true
 	progress := func(done time.Duration, bytes int64) {
 		q.mu.Lock()
 		defer q.mu.Unlock()
@@ -578,6 +613,10 @@ func (q *Queue) run(ctx context.Context, id string, j Job, work string) (string,
 		job.Bytes = bytes
 		if duration > 0 {
 			job.Fraction = min(float64(done)/float64(duration), 0.99)
+		}
+		// The first report includes what earlier attempts saved.
+		if first {
+			job.startFraction, first = job.Fraction, false
 		}
 	}
 

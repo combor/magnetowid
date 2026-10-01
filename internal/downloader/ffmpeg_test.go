@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/combor/magnetowid/internal/hls"
 	"github.com/combor/magnetowid/internal/provider"
 )
 
@@ -207,7 +208,6 @@ func segmentPath(t *testing.T, dir, name string, n int) string {
 	return "/" + segs[n]
 }
 
-// ffmpeg skips a missing segment and still exits 0.
 func TestFFmpegFailsOnMissingSegment(t *testing.T) {
 	if _, err := exec.LookPath("ffmpeg"); err != nil {
 		t.Skip("ffmpeg not installed")
@@ -225,8 +225,14 @@ func TestFFmpegFailsOnMissingSegment(t *testing.T) {
 	defer srv.Close()
 	err := (&FFmpeg{}).Download(context.Background(), provider.Stream{URL: srv.URL + "/master.m3u8"},
 		filepath.Join(t.TempDir(), "out.mp4"), func(time.Duration, int64) {})
+	if err == nil || !strings.Contains(err.Error(), "video segment 2 of 3: HTTP 404") {
+		t.Errorf("segments: err = %v", err)
+	}
+	// ffmpeg skips a missing segment and still exits 0.
+	err = (&FFmpeg{}).Download(context.Background(), provider.Stream{URL: srv.URL + "/stream_0.m3u8"},
+		filepath.Join(t.TempDir(), "out.mp4"), func(time.Duration, int64) {})
 	if err == nil || !strings.Contains(err.Error(), "incomplete download") {
-		t.Fatalf("err = %v", err)
+		t.Errorf("ffmpeg: err = %v", err)
 	}
 }
 
@@ -246,8 +252,9 @@ func TestFFmpegStallTimeout(t *testing.T) {
 	}))
 	defer srv.Close()
 	start := time.Now()
+	// ffmpeg reads media playlists itself.
 	err := (&FFmpeg{StallTimeout: time.Second}).Download(context.Background(),
-		provider.Stream{URL: srv.URL + "/master.m3u8"}, filepath.Join(t.TempDir(), "out.mp4"), func(time.Duration, int64) {})
+		provider.Stream{URL: srv.URL + "/stream_0.m3u8"}, filepath.Join(t.TempDir(), "out.mp4"), func(time.Duration, int64) {})
 	if err == nil || !strings.Contains(err.Error(), "stalled") {
 		t.Fatalf("err = %v", err)
 	}
@@ -296,7 +303,7 @@ func TestFFmpegFailsOnCorruptTSSegment(t *testing.T) {
 	}
 }
 
-func TestPickInputs(t *testing.T) {
+func TestDirectInputs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/split.m3u8":
@@ -327,9 +334,10 @@ video.m3u8
 		{"/media.m3u8", []string{srv.URL + "/media.m3u8"}, ""},
 		{"/film.mp4", []string{srv.URL + "/film.mp4"}, ""},
 	} {
-		got, language, err := pickInputs(ctx, srv.Client(), provider.Stream{URL: srv.URL + tt.path})
-		if err != nil || !reflect.DeepEqual(got, tt.want) || language != tt.language {
-			t.Errorf("%s: got %v, %q, %v; want %v, %q", tt.path, got, language, err, tt.want, tt.language)
+		s := provider.Stream{URL: srv.URL + tt.path}
+		m, master, err := hls.Load(ctx, srv.Client(), s)
+		if got := directInputs(s, m, master); err != nil || !reflect.DeepEqual(got, tt.want) || m.AudioLanguage != tt.language {
+			t.Errorf("%s: got %v, %q, %v; want %v, %q", tt.path, got, m.AudioLanguage, err, tt.want, tt.language)
 		}
 	}
 }
