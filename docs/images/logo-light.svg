@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 32" role="img" aria-label="magnetowid">
+  <rect x="1" y="1" width="46" height="30" rx="6" fill="#1d1d24"/>
+  <rect x="7" y="5.5" width="34" height="1.5" fill="#e8457c"/>
+  <rect x="7" y="7" width="34" height="1.5" fill="#f5873a"/>
+  <rect x="7" y="8.5" width="34" height="1.5" fill="#f6c343"/>
+  <rect x="7" y="10" width="34" height="1.5" fill="#2bb3a3"/>
+  <rect x="9" y="15" width="30" height="11" rx="5.5" fill="#3a3a45"/>
+  <g transform="translate(17 20.5)">
+    <circle r="4" fill="#f4f4f6"/>
+    <circle cy="-2.1" r=".85" fill="#3a3a45"/><circle cx="1.82" cy="1.05" r=".85" fill="#3a3a45"/><circle cx="-1.82" cy="1.05" r=".85" fill="#3a3a45"/>
+  </g>
+  <g transform="translate(31 20.5)">
+    <circle r="4" fill="#f4f4f6"/>
+    <circle cy="-2.1" r=".85" fill="#3a3a45"/><circle cx="1.82" cy="1.05" r=".85" fill="#3a3a45"/><circle cx="-1.82" cy="1.05" r=".85" fill="#3a3a45"/>
+  </g>
+</svg>
