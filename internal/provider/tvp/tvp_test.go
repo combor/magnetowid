@@ -276,6 +276,10 @@ func TestResolve(t *testing.T) {
 	if s.URL != "https://cdn.example/video-fmp4.m3u8" || s.Header.Get("User-Agent") == "" {
 		t.Errorf("stream = %+v", s)
 	}
+	// The stream is fetched the way the API is reached, e.g. through TVP's proxy.
+	if s.Transport == nil || s.Transport != p.client.Transport {
+		t.Errorf("stream transport = %v, want the client's", s.Transport)
+	}
 	wantSubs := []provider.Subtitle{
 		{URL: "https://s.tvp.pl/repository/attachment/c/b/c/sdh.xml", Format: provider.TTML, Language: "pol", SDH: true},
 		{URL: "https://s.tvp.pl/repository/attachment/1/e/4/ua.xml", Format: provider.TTML, Language: "ukr"},

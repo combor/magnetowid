@@ -333,6 +333,10 @@ func TestResolve(t *testing.T) {
 	if !strings.HasSuffix(s.URL, "/cf/vf.ism.hlsv2.ism/iptv_hd_abr_v1_hls_master.m3u8?Expires=1") || s.Header.Get("User-Agent") != userAgent {
 		t.Errorf("stream %+v", s)
 	}
+	// The stream is fetched the way the API is reached, e.g. through BBC's proxy.
+	if s.Transport == nil || s.Transport != p.client.Transport {
+		t.Errorf("stream transport = %v, want the client's", s.Transport)
+	}
 	// Each CDN's copy, in priority order.
 	srv := strings.TrimSuffix(s.URL, "/cf/vf.ism.hlsv2.ism/iptv_hd_abr_v1_hls_master.m3u8?Expires=1")
 	if want := []provider.Subtitle{

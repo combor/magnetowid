@@ -650,7 +650,7 @@ func (q *Queue) saveSubtitles(ctx context.Context, j Job, s provider.Stream, wor
 		if slices.Contains(paths, path) {
 			continue // more in the same language
 		}
-		srt, err := subtitles.Fetch(ctx, defaultClient, sub, s.Header)
+		srt, err := subtitles.Fetch(ctx, s.Client(defaultClient), sub, s.Header)
 		if err == nil {
 			err = os.WriteFile(path, srt, 0o666)
 		}

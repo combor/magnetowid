@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,7 +30,12 @@ type fakeProvider struct {
 	offline   int
 	err       error
 	subtitles []provider.Subtitle
+	transport http.RoundTripper
 }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
 
 func (f *fakeProvider) Name() string { return "fake" }
 
@@ -48,7 +54,8 @@ func (f *fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, e
 	if f.err != nil {
 		return provider.Stream{}, f.err
 	}
-	return provider.Stream{URL: fmt.Sprintf("http://example.invalid/%s/%d.m3u8", id, f.resolves), Subtitles: f.subtitles}, nil
+	return provider.Stream{URL: fmt.Sprintf("http://example.invalid/%s/%d.m3u8", id, f.resolves), Subtitles: f.subtitles,
+		Transport: f.transport}, nil
 }
 
 type fakeEngine struct {
@@ -365,7 +372,13 @@ func TestSubtitlesSaved(t *testing.T) {
 			<p begin="00:00:01.000" end="00:00:02.500">Dzień dobry.</p></div></body></tt>`)
 	}))
 	defer srv.Close()
-	p := &fakeProvider{subtitles: []provider.Subtitle{
+	// Subtitles come through the stream's transport, e.g. its site's proxy.
+	var fetched atomic.Int32
+	site := roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		fetched.Add(1)
+		return http.DefaultTransport.RoundTrip(req)
+	})
+	p := &fakeProvider{transport: site, subtitles: []provider.Subtitle{
 		{URL: srv.URL + "/napisy.xml", Format: provider.TTML, Language: "pol", SDH: true},
 		{URL: srv.URL + "/gone.xml", Format: provider.TTML, Language: "ukr"},
 	}}
@@ -388,6 +401,9 @@ func TestSubtitlesSaved(t *testing.T) {
 	srt, _ := os.ReadFile(filepath.Join(j.Storage, "Czas.honoru.S01E02.pol.sdh.srt"))
 	if want := "1\n00:00:01,000 --> 00:00:02,500\nDzień dobry.\n\n"; string(srt) != want {
 		t.Errorf("SRT %q, want %q", srt, want)
+	}
+	if n := fetched.Load(); n != 2 {
+		t.Errorf("the stream's transport made %d requests, want one for each subtitle", n)
 	}
 }
 

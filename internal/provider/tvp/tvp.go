@@ -623,7 +623,7 @@ func (p *Provider) Resolve(ctx context.Context, id string) (provider.Stream, err
 	if len(hls) == 0 || hls[0].Src == "" {
 		return provider.Stream{}, fmt.Errorf("%w: no HLS source", provider.ErrUnavailable)
 	}
-	s := provider.Stream{URL: hls[0].Src, Header: http.Header{"User-Agent": {userAgent}}}
+	s := provider.Stream{URL: hls[0].Src, Header: http.Header{"User-Agent": {userAgent}}, Transport: p.client.Transport}
 	for _, sub := range pl.Subtitles {
 		if sub.URL != "" {
 			s.Subtitles = append(s.Subtitles, sub.subtitle())

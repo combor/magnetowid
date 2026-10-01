@@ -181,7 +181,8 @@ func (p *Provider) hlsStream(ctx context.Context, sel selection) (provider.Strea
 			}
 			continue
 		}
-		s := provider.Stream{URL: final, Header: http.Header{"User-Agent": {userAgent}}, Playlist: string(body)}
+		s := provider.Stream{URL: final, Header: http.Header{"User-Agent": {userAgent}}, Transport: p.client.Transport,
+			Playlist: string(body)}
 		if atoi(video.Height) >= 1080 && atoi(video.Bitrate) > 0 {
 			s.Playlist = p.addFullHD(ctx, s, atoi(video.Bitrate)*1000)
 		}
