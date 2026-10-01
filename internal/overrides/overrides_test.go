@@ -211,3 +211,35 @@ func TestCheckFilm(t *testing.T) {
 		}
 	}
 }
+
+func TestInvalidErrorField(t *testing.T) {
+	series := func(o provider.SeriesOverride) error {
+		_, err := checkSeries(1, o, &site{})
+		return err
+	}
+	film := func(title string, year int) error {
+		_, err := checkFilm(title, year, provider.FilmOverride{ID: "abc"}, &site{})
+		return err
+	}
+	for _, tc := range []struct {
+		err           error
+		field, reason string
+	}{
+		{series(provider.SeriesOverride{}), "", "an override needs titles, an id, seasons or episodes; DELETE removes one"},
+		{series(provider.SeriesOverride{Titles: []string{"-"}}), "titles", `"-" has no letters or digits`},
+		{series(provider.SeriesOverride{ID: "1"}), "id", "not an ID"},
+		{series(provider.SeriesOverride{Seasons: []provider.SeasonRule{{Season: 1}, {Season: 1}}}), "seasons", "season 1 has two rules"},
+		{series(provider.SeriesOverride{Episodes: map[provider.EpisodeNumber]string{{Season: 1, Episode: 1}: "1"}}), "episodes", "S01E01: not an ID"},
+		{film("-", 1984), "title", `film title "-" has no letters or digits`},
+		{film("Cube", 0), "year", "year 0 is not positive"},
+	} {
+		var inv *InvalidError
+		if !errors.As(tc.err, &inv) {
+			t.Errorf("%v is not an InvalidError", tc.err)
+			continue
+		}
+		if inv.Field != tc.field || inv.Reason() != tc.reason {
+			t.Errorf("%v: field %q, reason %q; want %q, %q", tc.err, inv.Field, inv.Reason(), tc.field, tc.reason)
+		}
+	}
+}

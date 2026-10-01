@@ -1,0 +1,97 @@
+{{/* Shared by the series and film forms, which define the form and the help for these fields. */}}
+
+{{define "form-head" -}}
+<header class="form-head">
+  <p class="eyebrow">{{.Site}} · {{template "kind"}} override</p>
+  <h1 id="form-title">{{if .New}}New {{template "kind"}} override{{else}}{{.Name}}{{end}}</h1>
+  <p class="lead">It replaces automatic matching on {{.Site}} for what it covers. Fill in only what needs correcting.</p>
+</header>
+{{- end}}
+
+{{/* Enter saves: a form's first submit button is its default. */}}
+{{define "form-start" -}}
+<button class="visually-hidden" type="submit" tabindex="-1" aria-hidden="true">Save override</button>
+{{- with .Summary}}
+<p class="banner banner-danger" role="alert">{{template "icon-alert"}}<span>{{.}}</span></p>
+{{- end}}
+{{- end}}
+
+{{define "field-error" -}}
+{{template "icon-alert"}}<span>{{.}}</span>
+{{- end}}
+
+{{define "titles" -}}
+<div class="fieldset" role="group" aria-labelledby="titles-label">
+  <div class="fieldset-about">
+    <h2 id="titles-label">Titles to search</h2>
+    <p>{{template "titles-help"}}</p>
+  </div>
+  <div class="fieldset-body">
+    <ul class="lines">
+      {{- range .Titles}}
+      <li class="line">
+        <input class="input" id="title-{{.N}}" name="title" value="{{.Value}}" aria-label="Title {{.N}}" autocomplete="off" spellcheck="false"
+          {{- if .Focus}} autofocus{{end}}{{if index $.Errors "titles"}} aria-invalid="true" aria-describedby="titles-error"{{end}}>
+        {{- if gt (len $.Titles) 1}}
+        <button class="icon-btn" type="submit" name="remove" value="titles.{{.N}}" formnovalidate aria-label="Remove title {{.N}}" title="Remove">{{template "icon-x"}}</button>
+        {{- end}}
+      </li>
+      {{- end}}
+    </ul>
+    {{- with index .Errors "titles"}}
+    <p class="field-error" id="titles-error">{{template "field-error" .}}</p>
+    {{- end}}
+    <button class="btn btn-small btn-quiet" id="add-titles" type="submit" name="add" value="titles" formnovalidate{{if eq .Focus "add-titles"}} autofocus{{end}}>{{template "icon-plus"}}<span>Add a title</span></button>
+  </div>
+</div>
+{{- end}}
+
+{{define "site-id" -}}
+<div class="fieldset">
+  <div class="fieldset-about">
+    <h2><label for="id">ID or page address</label></h2>
+    <p>{{template "id-help"}}</p>
+  </div>
+  <div class="fieldset-body">
+    <input class="input" id="id" name="id" value="{{.ID}}" autocomplete="off" spellcheck="false"
+      {{- if eq .Focus "id"}} autofocus{{end}}{{if index .Errors "id"}} aria-invalid="true" aria-describedby="id-error"{{end}}>
+    {{- with index .Errors "id"}}
+    <p class="field-error" id="id-error">{{template "field-error" .}}</p>
+    {{- end}}
+  </div>
+</div>
+{{- end}}
+
+{{define "form-actions" -}}
+<div class="form-actions">
+  <button class="btn btn-accent" type="submit">Save override</button>
+  <a class="btn btn-quiet" href="/ui/overrides">Cancel</a>
+  {{- if not .New}}
+  <button class="btn btn-quiet btn-quiet-danger" type="button" popovertarget="remove-override">{{template "icon-trash"}}<span>Remove</span></button>
+  {{- end}}
+</div>
+{{- end}}
+
+{{/* Outside the form it removes, which can't hold another. */}}
+{{define "remove-override" -}}
+{{- if not .New}}
+<div class="confirm" id="remove-override" popover role="dialog" aria-labelledby="remove-override-title">
+  <h2 class="confirm-title" id="remove-override-title">Remove this override?</h2>
+  <p class="confirm-name">{{.Name}}</p>
+  <p class="confirm-text">magnetowid goes back to matching it automatically.</p>
+  <form class="confirm-actions" method="post" action="{{.Action}}/delete">
+    <button class="btn btn-quiet" type="button" popovertarget="remove-override" popovertargetaction="hide">Keep</button>
+    <button class="btn btn-danger" type="submit">Remove</button>
+  </form>
+</div>
+{{- end}}
+{{- end}}
+
+{{/* Saving swaps only the form, so the rest of the page keeps its place. */}}
+{{define "page" -}}
+<section class="card form-card" aria-labelledby="form-title">
+  {{template "form-head" .}}
+  <div id="override-form">{{template "form" .}}</div>
+</section>
+{{template "remove-override" .}}
+{{- end}}

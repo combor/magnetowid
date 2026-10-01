@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/combor/magnetowid/internal/downloader"
 	"github.com/combor/magnetowid/internal/nzb"
+	"github.com/combor/magnetowid/internal/overrides"
 	"github.com/combor/magnetowid/internal/provider"
 	"github.com/combor/magnetowid/internal/store"
 	bolt "go.etcd.io/bbolt"
@@ -39,6 +41,17 @@ func (fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, erro
 	return provider.Stream{}, nil
 }
 
+// IDs are lowercase letters, and pages https://site.example/<id>.
+func (fakeProvider) ParseID(ref string) (string, error) {
+	ref = strings.TrimPrefix(ref, "https://site.example/")
+	if ref == "" || strings.Trim(ref, "abcdefghijklmnopqrstuvwxyz") != "" {
+		return "", errors.New("not an ID")
+	}
+	return ref, nil
+}
+
+func (fakeProvider) SetOverrides(*provider.Overrides) {}
+
 type fakeEngine struct{}
 
 func (fakeEngine) Download(_ context.Context, _ provider.Stream, out string, progress func(time.Duration, int64)) error {
@@ -54,7 +67,12 @@ func newUI(t *testing.T) (*httptest.Server, *downloader.Queue, *bolt.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { db.Close() })
-	q, err := downloader.New(filepath.Dir(db.Path()), db, provider.NewRegistry(fakeProvider{}), fakeEngine{}, slog.New(slog.DiscardHandler))
+	providers := provider.NewRegistry(fakeProvider{})
+	q, err := downloader.New(filepath.Dir(db.Path()), db, providers, fakeEngine{}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := overrides.Open(db, providers)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,7 +82,7 @@ func newUI(t *testing.T) (*httptest.Server, *downloader.Queue, *bolt.DB) {
 	mux.Handle("/api", http.NotFoundHandler())
 	mux.HandleFunc("GET /overrides", http.NotFound)
 	mux.HandleFunc("GET /health", http.NotFound)
-	(&Handler{Queue: q, APIKey: "key", Version: "1.2.3", Log: slog.New(slog.DiscardHandler)}).Register(mux)
+	(&Handler{Queue: q, Overrides: o, APIKey: "key", Version: "1.2.3", Log: slog.New(slog.DiscardHandler)}).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, q, db

@@ -1,0 +1,55 @@
+{{define "page" -}}
+  {{- range .Sites}}
+  <section class="site" aria-labelledby="site-{{.Name}}">
+    <div class="section-head">
+      <h2 id="site-{{.Name}}">{{.Name}}</h2>
+      {{- with .Rows}}
+      <span class="count">{{len .}}</span>
+      {{- end}}
+      <div class="section-tools">
+        <a class="btn btn-small btn-quiet" href="/ui/overrides/{{.Name}}/series/new" aria-label="Add a series override for {{.Name}}">{{template "icon-plus"}}<span>Series</span></a>
+        <a class="btn btn-small btn-quiet" href="/ui/overrides/{{.Name}}/films/new" aria-label="Add a film override for {{.Name}}">{{template "icon-plus"}}<span>Film</span></a>
+      </div>
+    </div>
+    {{- if .Rows}}
+    <ul class="rows">
+      {{- range .Rows}}
+      <li class="row" id="{{.ID}}">
+        <span class="pos" aria-hidden="true">{{if .Film}}{{template "icon-film"}}{{else}}{{template "icon-tv"}}{{end}}</span>
+        <p class="row-title"><a href="{{.URL}}"><span>{{.Title}}</span>{{with .Year}} <span class="episode">{{.}}</span>{{end}}</a></p>
+        <p class="meta">
+          <span class="chip">{{if .Film}}Film{{else}}Series{{end}}</span>
+          <span class="facts">{{range .Facts}}<span>{{.}}</span>{{end}}</span>
+        </p>
+        <div class="actions">
+          <a class="icon-btn" href="{{.URL}}" aria-label="Edit {{.Label}}" title="Edit">{{template "icon-edit"}}</a>
+          {{template "remove-button" .}}
+          <div class="confirm" id="remove-{{.ID}}" popover role="dialog" aria-labelledby="remove-{{.ID}}-title">
+            <h2 class="confirm-title" id="remove-{{.ID}}-title">Remove this override?</h2>
+            <p class="confirm-name">{{.Label}}</p>
+            <p class="confirm-text">magnetowid goes back to matching it automatically.</p>
+            {{template "remove-notice" .}}
+            <form class="confirm-actions" method="post" action="{{.URL}}/delete" hx-post="{{.URL}}/delete">
+              {{template "keep-button" .}}
+              <button class="btn btn-danger" type="submit">Remove</button>
+            </form>
+          </div>
+        </div>
+      </li>
+      {{- end}}
+    </ul>
+    {{- else}}
+    <p class="hint">No overrides for {{.Name}}. Add one if a series or film is missing, or its episodes are paired wrongly.</p>
+    {{- end}}
+  </section>
+  {{- else}}
+  <section class="card empty" id="empty">
+    <span class="mark mark-xl">{{template "mark"}}</span>
+    <h2>No site takes overrides</h2>
+    <p>Overrides correct how a site’s series and films are matched.</p>
+  </section>
+  {{- end}}
+  {{- if .Sites}}
+  <p class="footnote">Overrides replace automatic matching for what they cover, from the next search.</p>
+  {{- end}}
+{{- end}}
