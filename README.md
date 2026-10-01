@@ -89,7 +89,8 @@ for container hostnames, volume mounts and Remote Path Mappings.
 
 Open `http://<magnetowid-host>:8484/` and sign in with the API key to see the
 queue and history, to pause, resume or remove downloads, and to correct matches
-with overrides. See [Web interface](docs/usage.md#web-interface).
+with overrides. Its Setup page lists the values to enter in Sonarr and Radarr.
+See [Web interface](docs/usage.md#web-interface).
 
 ## Help and contributing
 

@@ -43,6 +43,15 @@ const (
 	catTVHD     = 5040
 )
 
+// Categories returns the categories an indexer offers a kind's releases in,
+// for Sonarr's or Radarr's indexer settings.
+func Categories(kind provider.Kind) []int {
+	if kind == provider.Movie {
+		return []int{catMovies, catMoviesHD}
+	}
+	return []int{catTV, catTVHD}
+}
+
 // Handler serves the Newznab API. Mount it at "/{provider}/api".
 type Handler struct {
 	Providers *provider.Registry
@@ -505,8 +514,13 @@ func (h *Handler) nzbLink(r *http.Request, p provider.Provider, id string, secs 
 	return h.baseURL(r, p) + "?" + v.Encode()
 }
 
-// Honor reverse-proxy headers when constructing the public URL.
 func (h *Handler) baseURL(r *http.Request, p provider.Provider) string {
+	return BaseURL(r) + "/" + p.Name() + "/api"
+}
+
+// BaseURL is the address r reached magnetowid at, such as
+// "http://nas:8484". It honors reverse-proxy headers.
+func BaseURL(r *http.Request) string {
 	scheme := "http"
 	if r.TLS != nil || strings.EqualFold(firstValue(r.Header.Get("X-Forwarded-Proto")), "https") {
 		scheme = "https"
@@ -515,7 +529,7 @@ func (h *Handler) baseURL(r *http.Request, p provider.Provider) string {
 	if fh := firstValue(r.Header.Get("X-Forwarded-Host")); fh != "" {
 		host = fh
 	}
-	return scheme + "://" + host + "/" + p.Name() + "/api"
+	return scheme + "://" + host
 }
 
 func firstValue(v string) string {

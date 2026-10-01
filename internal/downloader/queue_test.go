@@ -272,6 +272,10 @@ func TestOutagePausesProvider(t *testing.T) {
 		if (j.ID == a || j.ID == b) && (j.Status != StatusQueued || j.Attempts != 0) {
 			t.Errorf("job %s: status = %s, attempts = %d", j.Name, j.Status, j.Attempts)
 		}
+		// Only a met the outage.
+		if (j.ID == a || j.ID == b) && j.Unreachable() != (j.ID == a) {
+			t.Errorf("job %s: unreachable = %v, error = %q", j.Name, j.Unreachable(), j.Error)
+		}
 	}
 	if until, ok := q.Outages()["fake"]; !ok || time.Until(until) < 50*time.Minute {
 		t.Errorf("outages = %v, want fake held back for about an hour", q.Outages())

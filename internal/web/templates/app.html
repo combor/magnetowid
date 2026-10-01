@@ -33,6 +33,7 @@
       <a class="tab" href="/ui/"{{if eq .Page "queue"}} aria-current="page"{{end}}>Queue{{if .Queued}}<span class="tab-count">{{.Queued}}</span>{{end}}</a>
       <a class="tab" href="/ui/history"{{if eq .Page "history"}} aria-current="page"{{end}}>History{{if .Finished}}<span class="tab-count">{{.Finished}}</span>{{end}}</a>
       <a class="tab" href="/ui/overrides"{{if eq .Page "overrides"}} aria-current="page"{{end}}>Overrides</a>
+      <a class="tab" href="/ui/setup"{{if eq .Page "setup"}} aria-current="page"{{end}}>Setup</a>
     </nav>
     {{- block "actions" .}}{{end}}
   </div>

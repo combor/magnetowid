@@ -613,6 +613,24 @@ func TestLinksBehindProxy(t *testing.T) {
 	}
 }
 
+func TestBaseURL(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "http://nas:8484/ui/setup", nil)
+	if got := BaseURL(r); got != "http://nas:8484" {
+		t.Errorf("BaseURL = %q", got)
+	}
+	r.Header.Set("X-Forwarded-Proto", "https, http")
+	r.Header.Set("X-Forwarded-Host", "magnetowid.example.com, internal:8484")
+	if got := BaseURL(r); got != "https://magnetowid.example.com" {
+		t.Errorf("BaseURL behind a proxy = %q", got)
+	}
+}
+
+func TestCategories(t *testing.T) {
+	if tv, films := Categories(provider.Episode), Categories(provider.Movie); !slices.Equal(tv, []int{5000, 5040}) || !slices.Equal(films, []int{2000, 2040}) {
+		t.Errorf("categories = %v and %v", tv, films)
+	}
+}
+
 func TestSearchByTVDBID(t *testing.T) {
 	fp := &fakeTVDBProvider{title: "Days of Honor"}
 	fp.items = []provider.Item{

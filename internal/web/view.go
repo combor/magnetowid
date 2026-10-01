@@ -14,7 +14,7 @@ import (
 // chrome is the queue summary every page shows.
 type chrome struct {
 	Version  string
-	Page     string // queue, history or overrides
+	Page     string // queue, history, overrides or setup
 	Paused   bool
 	Queued   int // unfinished jobs
 	Finished int
@@ -73,6 +73,8 @@ func (c chrome) Heading() string {
 		return "Download history"
 	case c.Page == "overrides":
 		return "Overrides"
+	case c.Page == "setup":
+		return "Setup"
 	}
 	return "Download queue"
 }
@@ -104,6 +106,8 @@ func pagePath(page string) string {
 		return "/ui/history"
 	case "overrides":
 		return "/ui/overrides"
+	case "setup":
+		return "/ui/setup"
 	}
 	return "/ui/"
 }

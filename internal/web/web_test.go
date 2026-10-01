@@ -82,7 +82,8 @@ func newUI(t *testing.T) (*httptest.Server, *downloader.Queue, *bolt.DB) {
 	mux.Handle("/api", http.NotFoundHandler())
 	mux.HandleFunc("GET /overrides", http.NotFound)
 	mux.HandleFunc("GET /health", http.NotFound)
-	(&Handler{Queue: q, Overrides: o, APIKey: "key", Version: "1.2.3", Log: slog.New(slog.DiscardHandler)}).Register(mux)
+	(&Handler{Queue: q, Overrides: o, Providers: providers, Categories: []string{"tv", "movies"}, APIKey: "key",
+		Version: "1.2.3", Log: slog.New(slog.DiscardHandler)}).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, q, db

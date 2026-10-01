@@ -104,6 +104,9 @@ Sonarr/Radarr must be able to read the download directory. If they see it at a d
 
 ## Sonarr / Radarr setup
 
+The [web interface](#web-interface)'s **Setup** page lists these values for
+your install.
+
 1. **Download client:** Settings → Download Clients → **SABnzbd**.
    - Name: `magnetowid`.
    - Host and port: magnetowid's host and port.
@@ -180,6 +183,13 @@ import a download removed from history.
 **Overrides** lists each site's [overrides](#correcting-matches), with forms to
 add, change and remove them for series and films. A form that can't be saved
 says why beside the field at fault.
+
+**Setup** shows what to enter in Sonarr and Radarr: the download client's host,
+port and category, and each site's indexer URL, API path and categories. The
+addresses are the ones the page was opened with, so use another host if the
+apps reach magnetowid [differently](#docker-networking-and-shared-downloads).
+It also shows the version, the download folder, and each site's state: working,
+or unreachable with the error and the time of the next attempt.
 
 Signing in lasts 30 days. Changing `MAGNETOWID_API_KEY` signs every browser
 out. Search for titles in Sonarr/Radarr.
