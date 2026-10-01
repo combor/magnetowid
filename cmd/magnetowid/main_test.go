@@ -2,7 +2,6 @@ package main
 
 import (
 	"net/http"
-	"reflect"
 	"strings"
 	"testing"
 )
@@ -40,9 +39,10 @@ func TestSiteClient(t *testing.T) {
 		return c.Transport.(*http.Transport)
 	}
 
-	// The environment's proxy is read once per process, so compare functions.
-	if got := transport("").Proxy; reflect.ValueOf(got).Pointer() != reflect.ValueOf(http.ProxyFromEnvironment).Pointer() {
-		t.Error("an unset proxy doesn't follow the environment")
+	// Unset, the environment decides host by host, for ffmpeg too: a transport
+	// here would make the downloader settle ffmpeg's proxy from one URL.
+	if c, err := siteClient(""); err != nil || c.Transport != nil || c.Timeout == 0 {
+		t.Errorf("siteClient(\"\") = %+v, %v; want a client without a transport", c, err)
 	}
 	if transport("direct").Proxy != nil {
 		t.Error(`"direct" still uses a proxy`)
@@ -59,7 +59,7 @@ func TestSiteClient(t *testing.T) {
 			t.Errorf("proxyName(%q) = %q, want %q", proxy, got, name)
 		}
 	}
-	if a, b := transport(""), transport(""); a == b {
+	if a, b := transport("direct"), transport("direct"); a == b {
 		t.Error("sites share a transport")
 	}
 

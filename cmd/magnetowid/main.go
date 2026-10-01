@@ -188,16 +188,19 @@ const (
 )
 
 // siteClient returns the client for a site's API and streams. proxy is an HTTP
-// proxy's URL, "direct", or empty for the environment's HTTPS_PROXY and NO_PROXY.
+// proxy's URL or "direct". Left empty, the client has no transport of its own:
+// the site and its streams follow the environment's HTTPS_PROXY and NO_PROXY,
+// which choose by host, and ffmpeg applies the environment's rules itself.
 func siteClient(proxy string) (*http.Client, error) {
+	client := &http.Client{Timeout: siteTimeout}
+	if proxy == "" {
+		return client, nil
+	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	// Keep a connection for each of a download's segment workers.
 	t.MaxIdleConnsPerHost = 4
-	switch proxy {
-	case "":
-	case directProxy:
-		t.Proxy = nil
-	default:
+	t.Proxy = nil
+	if proxy != directProxy {
 		// ffmpeg, which fetches some streams itself, tunnels through nothing else.
 		u, err := url.Parse(proxy)
 		if err != nil || u.Scheme != "http" || u.Host == "" {
@@ -206,7 +209,8 @@ func siteClient(proxy string) (*http.Client, error) {
 		}
 		t.Proxy = http.ProxyURL(u)
 	}
-	return &http.Client{Timeout: siteTimeout, Transport: t}, nil
+	client.Transport = t
+	return client, nil
 }
 
 // proxyName describes a valid proxy setting for the log, without its password.

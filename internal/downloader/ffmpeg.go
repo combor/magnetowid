@@ -127,6 +127,11 @@ func (f *FFmpeg) Download(ctx context.Context, s provider.Stream, out string, pr
 // proxyEnv returns the environment in which ffmpeg reaches the stream as its
 // Transport does, or nil, magnetowid's own, for a stream without one. ffmpeg
 // reads http_proxy for HTTP and HTTPS alike.
+//
+// The proxy for the stream's URL then serves every host ffmpeg fetches from,
+// renditions and segments included, so a Transport must use one proxy for all
+// hosts. Proxies chosen by host, as the environment's are, need a stream
+// without a Transport: ffmpeg applies the environment's rules itself.
 func proxyEnv(s provider.Stream) ([]string, error) {
 	t, ok := s.Transport.(*http.Transport)
 	if !ok {
