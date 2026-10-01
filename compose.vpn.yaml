@@ -1,0 +1,22 @@
+# Adds a VPN exit for a region-locked site to compose.yaml:
+#
+#   docker compose -f compose.yaml -f compose.vpn.yaml up -d
+#
+# Guide: https://github.com/combor/magnetowid/blob/main/docs/vpn.md
+services:
+  magnetowid:
+    environment:
+      # One setting per site, naming the exit in the site's country.
+      MAGNETOWID_TVP_PROXY: http://vpn-pl:8888
+    depends_on:
+      - vpn-pl
+
+  vpn-pl:
+    image: qmcgaw/gluetun:v3
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    # Copy vpn.env.example to vpn-pl.env and fill it in.
+    env_file: vpn-pl.env
