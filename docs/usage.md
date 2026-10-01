@@ -249,8 +249,8 @@ An override replaces magnetowid's matching for everything it covers,
 including its checks. An episode it places where the site has none, or only a
 paid one, gets no release; other episodes are matched as before. Overrides
 apply to searches and RSS, including the title searches Sonarr makes when its
-TVDB ID search finds nothing. Specials are not supported. See each site's
-notes for its numbering.
+TVDB ID search finds nothing. Season rules cover numbered seasons only; pin
+specials one by one, as `S00E01`. See each site's notes for its numbering.
 
 ## Docker networking and shared downloads
 
