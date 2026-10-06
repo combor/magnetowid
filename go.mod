@@ -7,4 +7,7 @@ require (
 	golang.org/x/text v0.42.0
 )
 
-require golang.org/x/sys v0.45.0 // indirect
+require (
+	github.com/stretchr/testify v1.12.1 // indirect
+	golang.org/x/sys v0.48.0 // indirect
+)

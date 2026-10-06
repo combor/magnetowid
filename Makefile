@@ -23,7 +23,7 @@ package-smoke:
 
 # Requires Linux, Docker, and ffmpeg with libx264.
 SONARR_IMAGE ?= lscr.io/linuxserver/sonarr:4.0.20.3014-ls326@sha256:f247545d23ba8b233d6604575347e48a623fe6ad75dda02348bf81917f3b5c06
-RADARR_IMAGE ?= lscr.io/linuxserver/radarr:6.4.4.10685-ls318@sha256:adb6c09d6b729ea5e642c99cea35af72702ef476bf4763f153299ac5db9f0b4f
+RADARR_IMAGE ?= lscr.io/linuxserver/radarr:6.4.4.10685-ls319@sha256:7dfd049e79c00b16fbc29c3f5d96a9e7b9e73a23930b4c5b3c4541d60b366814
 integration:
 	MAGNETOWID_SONARR_IMAGE=$(SONARR_IMAGE) MAGNETOWID_RADARR_IMAGE=$(RADARR_IMAGE) \
 		go test -count=1 -timeout 20m -v -run TestSonarrAndRadarr ./cmd/magnetowid
