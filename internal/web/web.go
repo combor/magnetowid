@@ -230,7 +230,7 @@ func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
 // show renders page with an optional notice. htmx requests get only the
 // refreshing part.
 func (h *Handler) show(w http.ResponseWriter, r *http.Request, status int, page, notice string) {
-	jobs, paused, now := h.Queue.Jobs(), h.Queue.Paused(), time.Now()
+	jobs, paused, now := h.Queue.AllJobs(), h.Queue.Paused(), time.Now()
 	var t *template.Template
 	var v any
 	switch page {

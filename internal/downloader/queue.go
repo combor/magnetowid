@@ -2,6 +2,7 @@
 package downloader
 
 import (
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -83,6 +84,8 @@ type Job struct {
 	Priority int       `json:"priority,omitzero"` // -1 low, 0 normal, 1 high, 2 force
 	// Separate from Status so older versions can still load paused jobs.
 	Paused bool `json:"paused,omitzero"`
+	// Derived from archive bucket membership, for UI snapshots only.
+	Archived bool `json:"-"`
 
 	startFraction float64 // when this attempt's progress began; not saved
 }
@@ -112,7 +115,7 @@ func (j Job) TimeLeft(now time.Time) time.Duration {
 func (j Job) Unreachable() bool { return strings.HasPrefix(j.Error, errUnreachable.Error()+": ") }
 
 // HistoryRetention is how long finished jobs are kept.
-const HistoryRetention = 30 * 24 * time.Hour
+const HistoryRetention = 90 * 24 * time.Hour
 
 const incompleteDir = ".incomplete"
 
@@ -126,13 +129,14 @@ type Queue struct {
 
 	retryDelay func(n int) time.Duration
 
-	mu      sync.Mutex
-	jobs    map[string]*Job
-	order   []string
-	cancels map[string]context.CancelCauseFunc
-	outages map[string]*outage // by provider name
-	paused  bool
-	wake    chan struct{}
+	mu       sync.Mutex
+	jobs     map[string]*Job
+	archived map[string]*Job
+	order    []string
+	cancels  map[string]context.CancelCauseFunc
+	outages  map[string]*outage // by provider name
+	paused   bool
+	wake     chan struct{}
 }
 
 type outage struct {
@@ -142,7 +146,11 @@ type outage struct {
 
 // New requires an absolute download path. Close db only after Run returns.
 func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, log *slog.Logger) (*Queue, error) {
-	jobs, err := loadJobs(db)
+	jobs, err := loadJobs(db, jobsBucket)
+	if err != nil {
+		return nil, err
+	}
+	archived, err := loadJobs(db, archivedBucket)
 	if err != nil {
 		return nil, err
 	}
@@ -158,6 +166,7 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 		db:         db,
 		retryDelay: backoff,
 		jobs:       make(map[string]*Job),
+		archived:   make(map[string]*Job),
 		cancels:    make(map[string]context.CancelCauseFunc),
 		outages:    make(map[string]*outage),
 		paused:     paused,
@@ -166,6 +175,9 @@ func New(dir string, db *bolt.DB, providers *provider.Registry, engine Engine, l
 	for _, j := range jobs {
 		q.jobs[j.ID] = j
 		q.order = append(q.order, j.ID)
+	}
+	for _, j := range archived {
+		q.archived[j.ID] = j
 	}
 	q.prune(time.Now())
 	q.cleanWork()
@@ -322,7 +334,7 @@ func (q *Queue) setJobsPaused(paused bool, ids []string) ([]string, error) {
 	return done, nil
 }
 
-// Jobs returns snapshots in insertion order.
+// Jobs returns unarchived snapshots in insertion order for download clients.
 func (q *Queue) Jobs() []Job {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -333,28 +345,80 @@ func (q *Queue) Jobs() []Job {
 	return out
 }
 
-// Delete cancels the job and optionally removes its files. It returns false for
-// unknown IDs; a save failure leaves the job unchanged.
+// AllJobs returns current and archived snapshots in insertion order for the UI.
+func (q *Queue) AllJobs() []Job {
+	q.mu.Lock()
+	out := make([]Job, 0, len(q.jobs)+len(q.archived))
+	for _, j := range q.jobs {
+		out = append(out, *j)
+	}
+	for _, j := range q.archived {
+		snapshot := *j
+		snapshot.Archived = true
+		out = append(out, snapshot)
+	}
+	q.mu.Unlock()
+	slices.SortFunc(out, func(a, b Job) int {
+		return cmp.Or(a.Added.Compare(b.Added), strings.Compare(a.ID, b.ID))
+	})
+	return out
+}
+
+type removalMode int
+
+const (
+	removePermanently removalMode = iota
+	removeUnfinished
+	removeForClient
+)
+
+// Delete permanently removes a job, optionally deleting its files. Archived
+// records never delete files. Unknown IDs return false; save failures change nothing.
 func (q *Queue) Delete(id string, deleteFiles bool) (bool, error) {
-	return q.discard(id, deleteFiles, false)
+	return q.discard(id, deleteFiles, removePermanently)
+}
+
+// RemoveForClient archives finished jobs and cancels unfinished jobs. Already
+// archived and unknown IDs return false without touching their records or files.
+func (q *Queue) RemoveForClient(id string, deleteFiles bool) (bool, error) {
+	return q.discard(id, deleteFiles, removeForClient)
 }
 
 // Cancel deletes an unfinished job. It returns false for unknown and finished
 // jobs, which stay in history for import.
 func (q *Queue) Cancel(id string) (bool, error) {
-	return q.discard(id, false, true)
+	return q.discard(id, false, removeUnfinished)
 }
 
-func (q *Queue) discard(id string, deleteFiles, unfinishedOnly bool) (bool, error) {
+func (q *Queue) discard(id string, deleteFiles bool, mode removalMode) (bool, error) {
 	q.mu.Lock()
+	if mode == removePermanently && q.archived[id] != nil {
+		defer q.mu.Unlock()
+		if err := q.remove(id); err != nil {
+			return false, err
+		}
+		delete(q.archived, id)
+		q.log.Info("archived job deleted", "id", id)
+		return true, nil
+	}
 	job, ok := q.jobs[id]
-	if !ok || (unfinishedOnly && job.Status != StatusQueued && job.Status != StatusDownloading) {
+	if !ok || (mode == removeUnfinished && job.Status != StatusQueued && job.Status != StatusDownloading) {
 		q.mu.Unlock()
 		return false, nil
 	}
-	if err := q.remove(id); err != nil {
+	archive := mode == removeForClient && (job.Status == StatusCompleted || job.Status == StatusFailed)
+	var err error
+	if archive {
+		err = q.archive(job)
+	} else {
+		err = q.remove(id)
+	}
+	if err != nil {
 		q.mu.Unlock()
 		return false, err
+	}
+	if archive {
+		q.archived[id] = job
 	}
 	// A running job's worker removes its files once the engine stops.
 	running := job.Status == StatusDownloading
@@ -380,7 +444,11 @@ func (q *Queue) discard(id string, deleteFiles, unfinishedOnly bool) (bool, erro
 	if !running {
 		q.removeWork(id)
 	}
-	q.log.Info("job deleted", "id", id, "delete_files", deleteFiles)
+	message := "job deleted"
+	if archive {
+		message = "job archived"
+	}
+	q.log.Info(message, "id", id, "delete_files", deleteFiles)
 	return true, nil
 }
 
@@ -560,6 +628,11 @@ func (q *Queue) prune(now time.Time) {
 			old = append(old, id)
 		}
 	}
+	for id, j := range q.archived {
+		if now.Sub(j.Finished) > HistoryRetention {
+			old = append(old, id)
+		}
+	}
 	if len(old) == 0 {
 		return
 	}
@@ -570,6 +643,7 @@ func (q *Queue) prune(now time.Time) {
 	}
 	for _, id := range old {
 		delete(q.jobs, id)
+		delete(q.archived, id)
 	}
 	q.order = slices.DeleteFunc(q.order, func(id string) bool { return q.jobs[id] == nil })
 	q.log.Info("forgot old finished jobs", "count", len(old))

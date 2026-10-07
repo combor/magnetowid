@@ -29,7 +29,10 @@ func (fakeProvider) Name() string { return "fake" }
 func (fakeProvider) Search(context.Context, provider.Query) ([]provider.Item, error) {
 	return nil, nil
 }
-func (fakeProvider) Resolve(context.Context, string) (provider.Stream, error) {
+func (fakeProvider) Resolve(_ context.Context, id string) (provider.Stream, error) {
+	if id == "gone" {
+		return provider.Stream{}, provider.ErrUnavailable
+	}
 	return provider.Stream{URL: "http://example.invalid/master.m3u8"}, nil
 }
 
@@ -303,8 +306,71 @@ func TestHistoryAndDelete(t *testing.T) {
 	if len(q.Jobs()) != 0 {
 		t.Errorf("jobs after delete = %v", q.Jobs())
 	}
+	if all := q.AllJobs(); len(all) != 1 || all[0].ID != id || !all[0].Archived {
+		t.Errorf("UI history after delete = %+v", all)
+	}
 	if _, err := os.Stat(storage); !os.IsNotExist(err) {
 		t.Errorf("storage not removed: %v", err)
+	}
+}
+
+func TestArchivedHistoryIsHidden(t *testing.T) {
+	srv, q := newServer(t, true)
+	var ids []string
+	for _, tc := range []struct{ name, category, ref string }{
+		{"A", "tv", "1"}, {"B", "tv", "gone"}, {"C", "tv", "2"}, {"D", "movies", "3"},
+	} {
+		id, err := q.Add(tc.name, tc.name+".nzb", tc.category, 0, false, nzb.Ref{Provider: "fake", ID: tc.ref})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		h := call(t, srv, url.Values{"mode": {"history"}})["history"].(map[string]any)
+		if h["noofslots"] == float64(4) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("jobs never finished")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// Both deletion modes must archive a job that has finished.
+	for i, mode := range []string{"queue", "history"} {
+		out := call(t, srv, url.Values{"mode": {mode}, "name": {"delete"}, "value": {ids[i]}})
+		if out["status"] != true || len(out["nzo_ids"].([]any)) != 1 {
+			t.Fatalf("%s delete = %v", mode, out)
+		}
+	}
+	if len(q.Jobs()) != 2 || len(q.AllJobs()) != 4 {
+		t.Fatalf("client/UI counts = %d/%d", len(q.Jobs()), len(q.AllJobs()))
+	}
+	for _, tc := range []struct {
+		params url.Values
+		name   string
+		total  float64
+	}{
+		{url.Values{"category": {"tv"}}, "C", 1},
+		{url.Values{"category": {"movies"}}, "D", 1},
+		{url.Values{"start": {"1"}, "limit": {"1"}}, "C", 2},
+	} {
+		tc.params.Set("mode", "history")
+		h := call(t, srv, tc.params)["history"].(map[string]any)
+		slots := h["slots"].([]any)
+		if h["noofslots"] != tc.total || len(slots) != 1 || slots[0].(map[string]any)["name"] != tc.name {
+			t.Errorf("filtered history = %v", h)
+		}
+	}
+	for _, mode := range []string{"queue", "history"} {
+		out := call(t, srv, url.Values{"mode": {mode}, "name": {"delete"}, "value": {ids[0] + "," + ids[1] + ",unknown"}, "del_files": {"1"}})
+		removed, _ := out["nzo_ids"].([]any)
+		if out["status"] != true || len(removed) != 0 || len(q.AllJobs()) != 4 {
+			t.Errorf("repeated delete = %v; UI history = %+v", out, q.AllJobs())
+		}
+	}
+	if _, err := os.Stat(q.AllJobs()[0].Storage); err != nil {
+		t.Errorf("repeated deletion removed retained files: %v", err)
 	}
 }
 

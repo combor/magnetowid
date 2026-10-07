@@ -515,7 +515,7 @@ func (h *Handler) topbar(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (h *Handler) formChrome() chrome {
-	c := newChrome(h.Queue.Jobs(), h.Queue.Paused(), h.Version, "overrides")
+	c := newChrome(h.Queue.AllJobs(), h.Queue.Paused(), h.Version, "overrides")
 	c.form = true
 	return c
 }

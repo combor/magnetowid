@@ -143,6 +143,7 @@ type jobView struct {
 	Took     string // finished jobs only
 	Finished string
 	Storage  string // a completed job's folder
+	Archived bool
 }
 
 // Label is the title and episode, for controls and the tab title.
@@ -303,6 +304,7 @@ func newHistoryView(jobs []downloader.Job, paused bool, version string, now time
 			Tone:     "ok",
 			Finished: ago(now.Sub(j.Finished)),
 			Storage:  j.Storage,
+			Archived: j.Archived,
 		}
 		jv.Title, jv.Episode, jv.Specs = splitName(j.Name)
 		if j.Status == downloader.StatusFailed {

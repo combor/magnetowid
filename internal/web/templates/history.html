@@ -13,6 +13,7 @@
           {{- with .Took}}<span>took {{.}}</span>{{end -}}
           {{- with .Attempt}}<span>{{.}} attempts</span>{{end -}}
           <span>finished {{.Finished}}</span>
+          {{- if .Archived}}<span title="Removed from download client history">Archived</span>{{end}}
         </span>
       </p>
       <div class="actions">
@@ -21,6 +22,9 @@
           <h2 class="confirm-title" id="remove-{{.ID}}-title">Remove it from history?</h2>
           <p class="confirm-name">{{.Label}}</p>
           <form class="confirm-form" method="post" action="/ui/history/{{.ID}}/delete" hx-post="/ui/history/{{.ID}}/delete">
+            {{- if .Archived}}
+            <p class="confirm-text">This removes the record and keeps the files.</p>
+            {{- else}}
             {{- with .Storage}}
             <label class="check">
               <input type="checkbox" name="files" value="1">
@@ -29,6 +33,7 @@
             {{- end}}
             {{- if eq .Tone "ok"}}
             <p class="confirm-text">If Sonarr or Radarr hasn’t imported it yet, it won’t.</p>
+            {{- end}}
             {{- end}}
             {{template "remove-notice" .}}
             <div class="confirm-actions">
@@ -44,12 +49,12 @@
     </li>
     {{- end}}
   </ol>
-  <p class="footnote">Finished downloads stay for {{.KeptDays}} days unless Sonarr or Radarr removes them first.</p>
+  <p class="footnote">History stays for {{.KeptDays}} days after a download finishes, even if Sonarr or Radarr removes it.</p>
   {{- else}}
   <section class="card empty" id="empty">
     <span class="mark mark-xl">{{template "mark"}}</span>
     <h2>No finished downloads</h2>
-    <p>Finished downloads stay here for {{.KeptDays}} days unless Sonarr or Radarr removes them first.</p>
+    <p>Completed and failed downloads appear here for {{.KeptDays}} days.</p>
   </section>
   {{- end}}
 {{- end}}
