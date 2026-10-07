@@ -409,6 +409,50 @@ func TestHistoryPage(t *testing.T) {
 	}
 }
 
+func TestArchivedHistoryPage(t *testing.T) {
+	srv, q, _ := newUI(t)
+	c := signIn(t, srv)
+	done := add(t, q, "Movie.2020.1080p.WEB-DL.AAC.H.264-FAKE", "1")
+	failed := add(t, q, "Failed.2020.1080p.WEB-DL.AAC.H.264-FAKE", "gone")
+	finish(t, q)
+	j, _ := job(q, done)
+	for _, id := range []string{done, failed} {
+		if ok, err := q.RemoveForClient(id, false); !ok || err != nil {
+			t.Fatalf("archive = %v, %v", ok, err)
+		}
+	}
+	for _, path := range []string{"/ui/", "/ui/history", "/ui/setup", "/ui/overrides"} {
+		r := get(t, srv, path, c)
+		if r.status != http.StatusOK || !strings.Contains(r.body, `History<span class="tab-count">2</span>`) {
+			t.Errorf("%s lacks archived count: %d %s", path, r.status, r.body)
+		}
+	}
+	if c := (&Handler{Queue: q}).formChrome(); c.Finished != 2 || c.State() != "idle" {
+		t.Errorf("form header excludes archives: %+v", c)
+	}
+	r := get(t, srv, "/ui/history", c)
+	for _, want := range []string{"Archived</span>", "Completed</span>", "Failed</span>", "content unavailable", "for 90 days", "keeps the files"} {
+		if !strings.Contains(r.body, want) {
+			t.Errorf("archive page lacks %q", want)
+		}
+	}
+	for _, unwanted := range []string{`name="files"`, "hasn’t imported it yet"} {
+		if strings.Contains(r.body, unwanted) {
+			t.Errorf("archive page contains %q", unwanted)
+		}
+	}
+	if strings.Index(r.body, `id="job-`+failed+`"`) > strings.Index(r.body, `id="job-`+done+`"`) {
+		t.Error("archive page is not newest first")
+	}
+	r = post(t, srv, "/ui/history/"+done+"/delete", url.Values{"files": {"1"}}, "Cookie", c.Name+"="+c.Value, "HX-Request", "true")
+	if r.status != http.StatusOK || strings.Contains(r.body, `id="job-`+done+`"`) || len(q.AllJobs()) != 1 {
+		t.Errorf("archive removal = %d %s", r.status, r.body)
+	}
+	if _, err := os.Stat(j.Storage); err != nil {
+		t.Errorf("forged files flag removed archive files: %v", err)
+	}
+}
+
 func TestStaticFiles(t *testing.T) {
 	srv, _, _ := newUI(t)
 	r := get(t, srv, "/ui/static/htmx-4.0.0.min.js", nil)
@@ -456,7 +500,7 @@ func TestHistoryView(t *testing.T) {
 	if j := v.Jobs[2]; j.Label() != "Ranczo S02E01" || j.Error != "" {
 		t.Errorf("job = %+v", j)
 	}
-	if v.Queued != 1 || v.Finished != 3 || v.State() != "downloading" || v.Refresh() != "/ui/history" || v.Every() != "5s" || v.KeptDays() != 30 {
+	if v.Queued != 1 || v.Finished != 3 || v.State() != "downloading" || v.Refresh() != "/ui/history" || v.Every() != "5s" || v.KeptDays() != 90 {
 		t.Errorf("chrome = %+v, state %q", v.chrome, v.State())
 	}
 }
@@ -585,7 +629,7 @@ func TestRenderStates(t *testing.T) {
 		want []string
 		not  []string
 	}{
-		{newHistoryView(nil, false, "", now), []string{"No finished downloads", "for 30 days"}, nil},
+		{newHistoryView(nil, false, "", now), []string{"No finished downloads", "for 90 days"}, nil},
 		{newHistoryView([]downloader.Job{done}, false, "", now), []string{"Cube", "/downloads/movies/Cube", "hasn’t imported it yet"}, nil},
 		{newHistoryView([]downloader.Job{gone}, false, "", now), []string{"&lt;b&gt;boom&lt;/b&gt;", `action="/ui/history/f1/delete"`},
 			[]string{`name="files"`, "hasn’t imported"}},

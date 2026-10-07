@@ -182,10 +182,14 @@ every second. Pause or resume the queue or a job, or remove a job; removing an
 unfinished download deletes its partial files. Resumed downloads continue where
 they stopped.
 
-**History** lists finished and failed downloads, newest first, and refreshes
-every five seconds. Downloads stay for 30 days unless Sonarr or Radarr removes
-them first. Removing one can also delete its folder; Sonarr and Radarr cannot
-import a download removed from history.
+**History** lists completed and failed downloads, newest first, and refreshes
+every five seconds. Records stay for 90 days after the download finishes,
+unless you remove them. When Sonarr or Radarr removes a download, its record
+stays here as **Archived**, with its original result.
+
+Removing an archived record keeps the files. If an unarchived download has a
+folder, you can delete it too. Removing a record before Sonarr or Radarr imports
+the download prevents that import.
 
 **Overrides** lists each site's [overrides](#correcting-matches), with forms to
 add, change and remove them for series and films. A form that can't be saved
@@ -328,7 +332,7 @@ Include the steps to reproduce and any relevant error message, with API keys rem
   known audio language. Probes run during search and are cached for a day.
   Downloads keep one audio track; subtitle conversion supports TTML only.
 - **Restarts:** `.magnetowid-jobs.db` stores the queue, history, and watch lists.
-  Completed history expires after 30 days. The download filesystem must support
+  Download history expires after 90 days. The download filesystem must support
   file locks; only one magnetowid instance can use it at a time.
 - **Partial downloads:** magnetowid fetches HLS segments, four at a time, into
   `.incomplete/<job id>` in the download folder, then remuxes them with ffmpeg.

@@ -167,7 +167,7 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 	deleteFiles := r.FormValue("del_files") == "1"
 	var ids []string
 	for _, id := range jobIDs(r) {
-		ok, err := h.Queue.Delete(id, deleteFiles)
+		ok, err := h.Queue.RemoveForClient(id, deleteFiles)
 		if err != nil {
 			h.Log.Error("deleting job", "id", id, "err", err)
 			writeJSON(w, errorResponse(err.Error()))

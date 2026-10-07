@@ -148,7 +148,7 @@ Open `http://<magnetowid-host>:8484/` and sign in with the API key.
 | Page | What it is for |
 |---|---|
 | **Queue** | The running download's progress and time left, and what is up next. Pause, resume or remove downloads. |
-| **History** | Finished and failed downloads from the last 30 days, with the error of any that failed. |
+| **History** | Completed and failed downloads from the last 90 days, kept after Sonarr or Radarr removes them. |
 | **Overrides** | Forms to [correct a match](docs/usage.md#correcting-matches) for a series or a film. |
 | **Setup** | The values to enter in Sonarr and Radarr, and whether each site is reachable. |
 

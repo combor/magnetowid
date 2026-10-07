@@ -106,9 +106,12 @@ func testSonarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid) {
 
 	// TVDB search must register the series for RSS.
 	a.command(ctx, t, map[string]any{"name": "EpisodeSearch", "episodeIds": []int{e2}})
-	a.checkGrab(ctx, t, "episodeId", e2, "Days.of.Honor.S01E02.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "seriesMatchType", "")
+	downloadID := a.checkGrab(ctx, t, "episodeId", e2, "Days.of.Honor.S01E02.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "seriesMatchType", "")
 	checkFile(t, a.waitImport(ctx, t, episodeFile(e2)))
 	a.checkSubtitles(t, 1)
+	mw.checkArchived(ctx, t, a, downloadID)
+	mw.restart(ctx, t)
+	mw.checkArchived(ctx, t, a, downloadID)
 
 	// Episode 3 aired yesterday in the fixture.
 	mw.waitFeed(ctx, t, url.Values{"t": {"tvsearch"}, "cat": {"5000,5040"}}, "Days.of.Honor.S01E03.")
@@ -142,9 +145,10 @@ func testRadarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid, sites
 	// Cube is dated 1998 in Radarr, 1997 on TVP.
 	cubeID := a.addMovie(ctx, t, 431)
 	a.command(ctx, t, map[string]any{"name": "MoviesSearch", "movieIds": []int{cubeID}})
-	a.checkGrab(ctx, t, "movieId", cubeID, "Cube.1998.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "movieMatchType", "")
+	downloadID := a.checkGrab(ctx, t, "movieId", cubeID, "Cube.1998.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "movieMatchType", "")
 	checkFile(t, a.waitImport(ctx, t, movieFile(cubeID)))
 	a.checkSubtitles(t, 1)
+	mw.checkArchived(ctx, t, a, downloadID)
 
 	// Search before TVP lists the film, then restart to bypass the 10-minute
 	// feed cache and verify the watch list survives.
@@ -152,6 +156,7 @@ func testRadarr(ctx context.Context, t *testing.T, a *arr, mw *magnetowid, sites
 	a.command(ctx, t, map[string]any{"name": "MoviesSearch", "movieIds": []int{sexmissionID}})
 	sites.release(seksmisja)
 	mw.restart(ctx, t)
+	mw.checkArchived(ctx, t, a, downloadID)
 	mw.waitFeed(ctx, t, url.Values{"t": {"movie"}, "cat": {"2000,2040"}}, "Seksmisja.1984.")
 	a.command(ctx, t, map[string]any{"name": "RssSync"})
 	a.checkGrab(ctx, t, "movieId", sexmissionID, "Seksmisja.1984.POLISH.1080p.WEB-DL.AAC.H.264-TVP", "movieMatchType", "Rss")
@@ -265,6 +270,76 @@ func (mw *magnetowid) restart(ctx context.Context, t *testing.T) {
 	t.Helper()
 	mw.stop()
 	mw.start(ctx, t)
+}
+
+// Confirm real client cleanup hides the job from the API but retains its UI row.
+func (mw *magnetowid) checkArchived(ctx context.Context, t *testing.T, a *arr, id string) {
+	t.Helper()
+	wait, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	req, err := http.NewRequestWithContext(wait, http.MethodPost, "http://"+mw.addr+"/ui/login",
+		strings.NewReader(url.Values{"apikey": {mw.apiKey}}.Encode()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusSeeOther || len(resp.Cookies()) == 0 {
+		t.Fatalf("UI sign-in returned %s", resp.Status)
+	}
+	cookies := resp.Cookies()
+	params := url.Values{"apikey": {mw.apiKey}, "mode": {"history"}, "output": {"json"}}
+	for {
+		a.command(wait, t, map[string]any{"name": "RefreshMonitoredDownloads"})
+		var history struct {
+			History struct {
+				Slots []struct {
+					ID string `json:"nzo_id"`
+				}
+			}
+		}
+		if err := getJSON(wait, "http://"+mw.addr+"/api?"+params.Encode(), &history); err != nil {
+			t.Fatal(err)
+		}
+		visible := false
+		for _, slot := range history.History.Slots {
+			visible = visible || slot.ID == id
+		}
+		if !visible {
+			req, err := http.NewRequestWithContext(wait, http.MethodGet, "http://"+mw.addr+"/ui/history", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, c := range cookies {
+				req.AddCookie(c)
+			}
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if err != nil || resp.StatusCode != http.StatusOK {
+				t.Fatalf("history page: %s, %v", resp.Status, err)
+			}
+			_, row, found := strings.Cut(string(body), `id="job-`+id+`"`)
+			row, _, _ = strings.Cut(row, "</li>")
+			if !found || !strings.Contains(row, "Archived</span>") || !strings.Contains(row, "Completed</span>") || strings.Contains(row, `name="files"`) {
+				t.Fatalf("imported download %s lacks its archived UI record", id)
+			}
+			return
+		}
+		select {
+		case <-wait.Done():
+			t.Fatalf("%s never cleared imported download %s", a.name, id)
+		case <-time.After(500 * time.Millisecond):
+		}
+	}
 }
 
 // The first RSS request starts an asynchronous rebuild.
@@ -438,6 +513,8 @@ func (a *arr) connect(ctx context.Context, t *testing.T, mw *magnetowid, categor
 	client := a.schema(ctx, t, "/downloadclient/schema", "Sabnzbd")
 	client["name"] = "magnetowid"
 	client["enable"] = true
+	client["removeCompletedDownloads"] = true
+	client["removeFailedDownloads"] = true
 	setFields(t, client, map[string]any{"host": host, "port": port, "apiKey": mw.apiKey, categoryField: category})
 	var added struct{ ID int }
 	a.call(ctx, t, "POST", "/downloadclient", client, &added)
@@ -458,6 +535,8 @@ func (a *arr) connect(ctx context.Context, t *testing.T, mw *magnetowid, categor
 	a.call(ctx, t, "GET", "/config/mediamanagement", nil, &media)
 	media["importExtraFiles"] = true
 	media["extraFileExtensions"] = "srt"
+	// Releases advertise full runtimes, but the fixture downloads tiny videos.
+	media["skipFreeSpaceCheckWhenImporting"] = true
 	a.call(ctx, t, "PUT", fmt.Sprintf("/config/mediamanagement/%v", media["id"]), media, nil)
 }
 
@@ -517,7 +596,7 @@ func (a *arr) addMovie(ctx context.Context, t *testing.T, tmdbID int) int {
 	return added.ID
 }
 
-func (a *arr) checkGrab(ctx context.Context, t *testing.T, idField string, id int, release, matchField, source string) {
+func (a *arr) checkGrab(ctx context.Context, t *testing.T, idField string, id int, release, matchField, source string) string {
 	t.Helper()
 	var history struct{ Records []map[string]any }
 	a.call(ctx, t, "GET", "/history?pageSize=100&sortKey=date&sortDirection=descending", nil, &history)
@@ -544,7 +623,11 @@ func (a *arr) checkGrab(ctx context.Context, t *testing.T, idField string, id in
 		if source != "" && grab.Data["releaseSource"] != source {
 			t.Errorf("%s grabbed %s from %v, want %s", a.name, grab.SourceTitle, grab.Data["releaseSource"], source)
 		}
-		return
+		downloadID, _ := r["downloadId"].(string)
+		if downloadID == "" {
+			t.Fatal("grab history lacks download ID")
+		}
+		return downloadID
 	}
 	// Report search rejection reasons on failure.
 	var releases []struct {
@@ -561,6 +644,7 @@ func (a *arr) checkGrab(ctx context.Context, t *testing.T, idField string, id in
 		}
 	}
 	t.FailNow()
+	return ""
 }
 
 func (a *arr) waitImport(ctx context.Context, t *testing.T, file func() map[string]any) map[string]any {
