@@ -72,7 +72,7 @@ you set up a VPN exit for a [region-locked site](vpn.md).
 
 ### Build from source
 
-Requires Go 1.27.1+ and ffmpeg.
+Requires Go 1.27.2+ and ffmpeg.
 
 ```sh
 git clone https://github.com/combor/magnetowid.git
