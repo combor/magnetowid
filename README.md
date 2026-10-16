@@ -75,6 +75,9 @@ flowchart LR
     downloads -->|"Import into library"| arr
 ```
 
+[Explore the interactive diagram](https://combor.github.io/magnetowid/how-it-works.html)
+to trace each step and open the code behind it.
+
 ## Quick start
 
 You need [Docker with Compose](https://docs.docker.com/compose/install/). The
