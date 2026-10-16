@@ -1,0 +1,190 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "How magnetowid works",
+    "locale": "en",
+    "output": "docs/diagrams/how-it-works.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/combor/magnetowid",
+      "provider": "github",
+      "link_mode": "web",
+      "revision": "45f963b9cfd83875623fbc1495b375510c99b586"
+    }
+  },
+  "components": [
+    {
+      "id": "arr",
+      "type": "external",
+      "label": "Sonarr / Radarr",
+      "sublabel": "TV and film libraries",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        150,
+        64
+      ],
+      "sources": [
+        {
+          "path": "README.md",
+          "line": 127,
+          "end_line": 137,
+          "label": "Indexer and download client setup"
+        },
+        {
+          "path": "README.md",
+          "line": 139,
+          "end_line": 142,
+          "label": "Apps must read the download folder"
+        }
+      ]
+    },
+    {
+      "id": "magnetowid",
+      "type": "backend",
+      "label": "magnetowid",
+      "sublabel": "Newznab + SABnzbd APIs",
+      "pos": [
+        405,
+        40
+      ],
+      "size": [
+        180,
+        64
+      ],
+      "sources": [
+        {
+          "path": "cmd/magnetowid/main.go",
+          "line": 117,
+          "end_line": 138,
+          "label": "Providers, queue and API routes"
+        },
+        {
+          "path": "internal/newznab/newznab.go",
+          "line": 68,
+          "end_line": 90,
+          "label": "Newznab search and get"
+        },
+        {
+          "path": "internal/sabnzbd/sabnzbd.go",
+          "line": 262,
+          "end_line": 295,
+          "label": "History reports each storage path"
+        }
+      ]
+    },
+    {
+      "id": "vod",
+      "type": "cloud",
+      "label": "VOD services",
+      "sublabel": "TVP VOD · BBC iPlayer",
+      "pos": [
+        795,
+        40
+      ],
+      "size": [
+        160,
+        64
+      ],
+      "sources": [
+        {
+          "path": "internal/provider/provider.go",
+          "line": 101,
+          "end_line": 105,
+          "label": "Provider: Search and Resolve"
+        },
+        {
+          "path": "internal/provider/tvp/tvp.go",
+          "line": 1,
+          "end_line": 2,
+          "label": "TVP VOD provider"
+        },
+        {
+          "path": "internal/provider/bbc/bbc.go",
+          "line": 1,
+          "end_line": 2,
+          "label": "BBC iPlayer provider"
+        }
+      ]
+    },
+    {
+      "id": "downloads",
+      "type": "database",
+      "label": "Shared download folder",
+      "sublabel": "MP4 + SRT subtitles",
+      "pos": [
+        400,
+        220
+      ],
+      "size": [
+        190,
+        64
+      ],
+      "sources": [
+        {
+          "path": "cmd/magnetowid/main.go",
+          "line": 52,
+          "label": "-download-dir flag"
+        },
+        {
+          "path": "internal/downloader/queue.go",
+          "line": 756,
+          "end_line": 801,
+          "label": "Moves finished files into place"
+        }
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "arr-requests",
+      "from": "arr",
+      "to": "magnetowid",
+      "label": "Search and download requests",
+      "variant": "emphasis"
+    },
+    {
+      "id": "fetch-vod",
+      "from": "magnetowid",
+      "to": "vod",
+      "label": "Fetches catalogue and video"
+    },
+    {
+      "id": "write-mp4",
+      "from": "magnetowid",
+      "to": "downloads",
+      "label": "MP4 files"
+    },
+    {
+      "id": "import",
+      "from": "downloads",
+      "to": "arr",
+      "label": "Import into library",
+      "fromSide": "left",
+      "toSide": "bottom"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two APIs, one service",
+      "items": [
+        "A Newznab indexer per site: /tvp/api and /bbc/api",
+        "A SABnzbd-compatible download client at /api",
+        "Both APIs use the same API key"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Finished downloads",
+      "items": [
+        "Saved to {download-dir}/{category}/{name}/",
+        "Video as MP4, subtitles as SRT beside it",
+        "Sonarr and Radarr find the folder through the storage path in the SABnzbd history"
+      ]
+    }
+  ]
+}

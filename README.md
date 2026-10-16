@@ -67,13 +67,17 @@ country, give it a VPN exit: see [Region-locked sites](docs/vpn.md).
 
 ## How it works
 
-```mermaid
-flowchart LR
-    arr["Sonarr / Radarr"] -->|"Search and download requests"| magnetowid["magnetowid"]
-    magnetowid <-->|"Catalogue and video"| providers["VOD services"]
-    magnetowid -->|"MP4 files"| downloads["Shared download folder"]
-    downloads -->|"Import into library"| arr
-```
+<p align="center">
+  <a href="https://combor.github.io/magnetowid/how-it-works.html">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/how-it-works-dark.png">
+      <img src="docs/images/how-it-works-light.png" alt="How magnetowid works: Sonarr and Radarr send search and download requests to magnetowid, which fetches the catalogue and video from the VOD services and writes MP4 files to a shared download folder, from which Sonarr and Radarr import them into the library">
+    </picture>
+  </a>
+</p>
+
+[Explore the interactive diagram](https://combor.github.io/magnetowid/how-it-works.html)
+to trace each step and open the code behind it.
 
 ## Quick start
 
