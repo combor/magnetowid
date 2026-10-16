@@ -5,7 +5,10 @@ on:
     branches:
       - main
     paths:
+      - 'docs/site/**'
       - 'docs/diagrams/**'
+      - 'docs/images/**'
+      - 'internal/web/static/icon.svg'
       - '.github/workflows/pages.yml'
   workflow_dispatch:
 
@@ -18,7 +21,7 @@ concurrency:
 
 jobs:
   deploy:
-    name: Deploy Diagrams
+    name: Deploy Site
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -30,8 +33,14 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Assemble site
+        run: |
+          mkdir -p _site/images
+          cp docs/site/* _site/
+          cp docs/diagrams/how-it-works.html _site/
+          cp docs/images/* internal/web/static/icon.svg _site/images/
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
-          path: docs/diagrams
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
