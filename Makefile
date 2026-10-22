@@ -22,8 +22,8 @@ package-smoke:
 	MAGNETOWID_SMOKE_DIST=$(CURDIR)/dist go test -count=1 -timeout 30m -run TestPackageService ./cmd/magnetowid
 
 # Requires Linux, Docker, and ffmpeg with libx264.
-SONARR_IMAGE ?= lscr.io/linuxserver/sonarr:4.0.20.3014-ls328@sha256:0deb8db6c839ac475e9cd86277712772c40ba7f929a003d7e1de36c4b666bc13
-RADARR_IMAGE ?= lscr.io/linuxserver/radarr:6.4.4.10685-ls320@sha256:cfbc4fa09dc9d78f7cedc898f4ec48c6277cacedc523c4e159db6ff1c741959c
+SONARR_IMAGE ?= lscr.io/linuxserver/sonarr:4.0.20.3014-ls1@sha256:889dcc58c6aea859033985894b519b2e6b1e55d92527ed123f9f52e42ae7c97b
+RADARR_IMAGE ?= lscr.io/linuxserver/radarr:6.4.4.10685-ls323@sha256:fc0ae3c50f8128b97e84381903ec8d6845c3a569641cb7117c124376cccb57c1
 integration:
 	MAGNETOWID_SONARR_IMAGE=$(SONARR_IMAGE) MAGNETOWID_RADARR_IMAGE=$(RADARR_IMAGE) \
 		go test -count=1 -timeout 20m -v -run TestSonarrAndRadarr ./cmd/magnetowid
