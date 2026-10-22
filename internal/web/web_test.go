@@ -83,7 +83,7 @@ func newUI(t *testing.T) (*httptest.Server, *downloader.Queue, *bolt.DB) {
 	mux.HandleFunc("GET /overrides", http.NotFound)
 	mux.HandleFunc("GET /health", http.NotFound)
 	(&Handler{Queue: q, Overrides: o, Providers: providers, Categories: []string{"tv", "movies"}, APIKey: "key",
-		Version: "1.2.3", Log: slog.New(slog.DiscardHandler)}).Register(mux)
+		Version: "1.2.3", DB: db, Log: slog.New(slog.DiscardHandler)}).Register(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv, q, db
@@ -234,10 +234,43 @@ func TestSignIn(t *testing.T) {
 		}
 	}
 
-	r = post(t, srv, "/ui/logout", nil)
+	other := &http.Cookie{Name: cookieName, Value: (&Handler{APIKey: "key"}).session(time.Now().Add(time.Hour))}
+	r = post(t, srv, "/ui/logout", nil, "Cookie", c.Name+"="+c.Value)
 	out, err := http.ParseSetCookie(r.header.Get("Set-Cookie"))
 	if r.status != http.StatusSeeOther || r.header.Get("Location") != "/ui/login" || err != nil || out.Name != cookieName || out.MaxAge >= 0 {
 		t.Errorf("sign-out = %d to %q, cookie %+v, %v", r.status, r.header.Get("Location"), out, err)
+	}
+	// Signing out ends the session on the server too, and only that session.
+	if r := get(t, srv, "/ui/", c); r.status != http.StatusSeeOther {
+		t.Errorf("signed-out session = %d", r.status)
+	}
+	if r := get(t, srv, "/ui/", other); r.status != http.StatusOK {
+		t.Errorf("another session after a sign-out = %d", r.status)
+	}
+}
+
+// Sign-outs are kept only for sessions this server issued, until they lapse.
+func TestSignOutRecords(t *testing.T) {
+	srv, _, db := newUI(t)
+	h := &Handler{APIKey: "key", DB: db}
+	if err := h.signOut(h.session(time.Now().Add(-time.Minute))); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"nonsense", (&Handler{APIKey: "old key"}).session(time.Now().Add(time.Hour))} {
+		post(t, srv, "/ui/logout", nil, "Cookie", cookieName+"="+value)
+	}
+	c := signIn(t, srv)
+	post(t, srv, "/ui/logout", nil, "Cookie", c.Name+"="+c.Value)
+
+	var kept []string
+	db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(signedOutBucket).ForEach(func(k, _ []byte) error {
+			kept = append(kept, string(k))
+			return nil
+		})
+	})
+	if !slices.Equal(kept, []string{c.Value}) {
+		t.Errorf("recorded sign-outs %q, want only %q", kept, c.Value)
 	}
 }
 

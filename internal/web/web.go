@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	bolt "go.etcd.io/bbolt"
+
 	"github.com/combor/magnetowid/internal/downloader"
 	"github.com/combor/magnetowid/internal/newznab"
 	"github.com/combor/magnetowid/internal/overrides"
@@ -50,6 +52,9 @@ const (
 	cookieAge  = 30 * 24 * time.Hour
 )
 
+// Sessions signed out before they lapse, by cookie value, with their expiries.
+var signedOutBucket = []byte("signed_out_sessions")
+
 // Handler serves the interface under /ui/. Signing in takes the API key.
 type Handler struct {
 	Queue      *downloader.Queue
@@ -58,6 +63,7 @@ type Handler struct {
 	Categories []string // the download categories
 	APIKey     string
 	Version    string
+	DB         *bolt.DB // keeps sign-outs
 	Log        *slog.Logger
 }
 
@@ -142,7 +148,8 @@ func staticFiles() http.Handler {
 
 // A session is its expiry and a MAC of it keyed by the API key, so it lapses
 // on the server too, changing the key signs everyone out, and the cookie does
-// not reveal the key.
+// not reveal the key. Signing out records the session until it lapses, so
+// copies of the cookie stop working too.
 func (h *Handler) session(expires time.Time) string {
 	exp := strconv.FormatInt(expires.Unix(), 10)
 	return exp + "." + h.sessionMAC(exp)
@@ -161,7 +168,45 @@ func (h *Handler) signedIn(r *http.Request) bool {
 	}
 	exp, mac, _ := strings.Cut(c.Value, ".")
 	unix, err := strconv.ParseInt(exp, 10, 64)
-	return err == nil && hmac.Equal([]byte(mac), []byte(h.sessionMAC(exp))) && time.Now().Unix() < unix
+	return err == nil && hmac.Equal([]byte(mac), []byte(h.sessionMAC(exp))) && time.Now().Unix() < unix &&
+		!h.signedOut(c.Value)
+}
+
+// Reading fails only once the database is closed, and then a broken database
+// should show actions' errors rather than the sign-in page.
+func (h *Handler) signedOut(session string) bool {
+	var out bool
+	h.DB.View(func(tx *bolt.Tx) error {
+		b := tx.Bucket(signedOutBucket)
+		out = b != nil && b.Get([]byte(session)) != nil
+		return nil
+	})
+	return out
+}
+
+// signOut records session, and forgets the sessions that have lapsed.
+func (h *Handler) signOut(session string) error {
+	exp, _, _ := strings.Cut(session, ".")
+	now := time.Now().Unix()
+	return h.DB.Update(func(tx *bolt.Tx) error {
+		b, err := tx.CreateBucketIfNotExists(signedOutBucket)
+		if err != nil {
+			return err
+		}
+		var lapsed [][]byte
+		b.ForEach(func(k, v []byte) error {
+			if unix, _ := strconv.ParseInt(string(v), 10, 64); unix <= now {
+				lapsed = append(lapsed, bytes.Clone(k))
+			}
+			return nil
+		})
+		for _, k := range lapsed {
+			if err := b.Delete(k); err != nil {
+				return err
+			}
+		}
+		return b.Put([]byte(session), []byte(exp))
+	})
 }
 
 func (h *Handler) auth(next http.HandlerFunc) http.Handler {
@@ -215,6 +260,13 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	// Only sessions this server issued are recorded, so anyone can sign out
+	// without filling the database.
+	if c, err := r.Cookie(cookieName); err == nil && h.signedIn(r) {
+		if err := h.signOut(c.Value); err != nil {
+			h.Log.Error("recording a sign-out", "err", err)
+		}
+	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Path: "/ui", MaxAge: -1, HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteLaxMode})
 	http.Redirect(w, r, "/ui/login", http.StatusSeeOther)
 }
