@@ -1,7 +1,7 @@
 // Package web serves the browser interface: sign-in, live queue and history
 // pages with download controls, forms for overrides, and a setup page.
 //
-// static/htmx-4.0.0.min.js is dist/htmx.min.js from the htmx.org 4.0.0 npm
+// static/htmx-4.0.1.min.js is dist/htmx.min.js from the htmx.org 4.0.1 npm
 // package, under the Zero-Clause BSD license.
 package web
 

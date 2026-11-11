@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 
-# golang:1.27.3-trixie; keep in sync with go.mod.
-FROM --platform=$BUILDPLATFORM golang@sha256:fbb7ae40b62ff8afe31662df570d39b4f5052ac32b90dae8e60d7657a20a74f4 AS build
+# golang:1.27.4-trixie; keep in sync with go.mod.
+FROM --platform=$BUILDPLATFORM golang@sha256:b54b2639de8c1bfe538ec5ffc45f29b1932235ac5f6d63c059853646677112d9 AS build
 
 WORKDIR /src
 
@@ -19,8 +19,8 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
     go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /magnetowid ./cmd/magnetowid
 
-# alpine:3.24.3 supplies ffmpeg's runtime dependencies.
-FROM alpine@sha256:b3413572228e34bd1c9245f5565e6cd127005655e8a7899aef33d8e83255c9e6
+# alpine:3.24.4 supplies ffmpeg's runtime dependencies.
+FROM alpine@sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf
 
 LABEL org.opencontainers.image.title="magnetowid" \
       org.opencontainers.image.description="Downloads movies and series from video-on-demand sites for Sonarr and Radarr." \

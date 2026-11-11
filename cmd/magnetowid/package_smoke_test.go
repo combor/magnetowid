@@ -38,7 +38,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends systemd`,
 	},
 	{
 		name: "fedora",
-		dockerfile: `FROM fedora:44
+		dockerfile: `FROM fedora:45
 RUN dnf install -y systemd`,
 		install:  "dnf install -y /dist/magnetowid_*_linux_$GOARCH.rpm",
 		upgrade:  "dnf reinstall -y /dist/magnetowid_*_linux_$GOARCH.rpm",
