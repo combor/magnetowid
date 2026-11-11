@@ -100,7 +100,7 @@ func checkAPIs(ctx context.Context, t *testing.T, base, apiKey, downloadDir stri
 	if page, err := get(ctx, base+"/ui/login"); err != nil || !strings.Contains(string(page), `name="apikey"`) {
 		t.Errorf("sign-in page: %q, %v", page, err)
 	}
-	if js, err := get(ctx, base+"/ui/static/htmx-4.0.0.min.js"); err != nil || !strings.Contains(string(js), "htmx") {
+	if js, err := get(ctx, base+"/ui/static/htmx-4.0.1.min.js"); err != nil || !strings.Contains(string(js), "htmx") {
 		t.Errorf("htmx script: %v", err)
 	}
 }
