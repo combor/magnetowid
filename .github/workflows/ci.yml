@@ -165,6 +165,9 @@ jobs:
     runs-on: ubuntu-latest
     # Allow up to 20 minutes of notarization per macOS binary, plus build/upload.
     timeout-minutes: 60
+    # Release credentials belong in this environment, which only v* tags
+    # can deploy to.
+    environment: release
     permissions:
       contents: write
     steps:
